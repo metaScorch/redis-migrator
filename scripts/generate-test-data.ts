@@ -1,4 +1,4 @@
-const Redis = require('ioredis');
+import Redis from 'ioredis';
 
 async function generateTestData() {
   // Connect to local Redis
@@ -14,7 +14,7 @@ async function generateTestData() {
     const promises = [];
 
     // Strings with different sizes
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 100000; i++) {
       const value = 'x'.repeat(Math.floor(Math.random() * 1000));
       promises.push(redis.set(`test:string:${i}`, value));
     }
@@ -72,3 +72,4 @@ async function generateTestData() {
 generateTestData()
   .then(() => console.log('Test data generation complete!'))
   .catch(console.error);
+

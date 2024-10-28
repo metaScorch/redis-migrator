@@ -30,6 +30,11 @@ interface MigrationStatus {
     operation: string;
     timestamp: Date;
   }>;
+  recentChanges?: Array<{
+    key: string;
+    operation: string;
+    timestamp: Date;
+  }>;
 }
 
 interface PerformanceData {
@@ -295,6 +300,7 @@ const startMigration = async () => {
               <TabsTrigger value="performance">Performance</TabsTrigger>
               <TabsTrigger value="operations">Recent Operations</TabsTrigger>
               <TabsTrigger value="errors">Errors</TabsTrigger>
+              <TabsTrigger value="realtime">Realtime Changes</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">
@@ -386,6 +392,20 @@ const startMigration = async () => {
               ) : (
                 <div className="text-gray-500">No errors reported</div>
               )}
+            </TabsContent>
+
+            <TabsContent value="realtime">
+              <div className="space-y-2">
+                {status.recentChanges?.map((change, index) => (
+                  <div key={index} className="flex justify-between items-center text-sm">
+                    <span>{change.key}</span>
+                    <span className="text-gray-500">{change.operation}</span>
+                    <span className="text-gray-500">
+                      {new Date(change.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </TabsContent>
           </Tabs>
         </CardContent>

@@ -12,7 +12,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "generate-data": "ts-node --esm --project tsconfig.json scripts/generate-test-data.ts",
+    "generate-data": "NODE_OPTIONS=\"--loader ts-node/esm\" ts-node scripts/generate-test-data.ts",
     "monitor": "ts-node --esm scripts/monitor-migration.ts",
     "verify": "ts-node --esm scripts/verify-migration.ts",
     "test-realtime": "tsx scripts/test-realtime.ts",

@@ -37,7 +37,7 @@ export class RedisMigrator extends EventEmitter {
   private processingQueue: boolean = false;
   private isRunning: boolean = false;
 
-  constructor(sourceConfig: RedisConfig, targetConfig: RedisConfig) {
+  constructor(sourceConfig: RedisConfig, targetConfig: RedisConfig, options: { enableRealtimeSync?: boolean } = {}) {
     super();
     this.source = new Redis({
       host: sourceConfig.host,
@@ -64,6 +64,11 @@ export class RedisMigrator extends EventEmitter {
     };
 
     this.setupKeyspaceNotifications();
+
+    if (options.enableRealtimeSync) {
+      this.setupRealtimeSync();
+      this.startPeriodicCountUpdate();
+    }
   }
 
   private async setupKeyspaceNotifications() {
@@ -252,7 +257,6 @@ export class RedisMigrator extends EventEmitter {
     }
 
     this.initialScanRunning = true;
-    this.realtimeSyncEnabled = true;
     this.isRunning = true;
     this.stats.startTime = Date.now();
     this.scanCursor = '0';
@@ -260,6 +264,9 @@ export class RedisMigrator extends EventEmitter {
     this.stats.errors = [];
 
     try {
+      // Enable real-time sync before starting the initial scan
+      await this.enableRealtimeSync();
+
       const dbsize = await this.source.dbsize();
       this.stats.total = Number(dbsize);
       
@@ -286,6 +293,16 @@ export class RedisMigrator extends EventEmitter {
 
       this.initialScanRunning = false;
       this.emit('scanComplete');
+
+      // Keep real-time sync running after initial scan completes
+      if (this.isRunning) {
+        this.emit('progress', {
+          processed: this.stats.processed,
+          total: this.stats.total,
+          percent: 100,
+          keysPerSecond: this.stats.keysPerSecond,
+        });
+      }
     } catch (error: unknown) {
       const redisError = error as RedisError;
       const errorMessage = redisError?.message || 'Unknown error during migration';
@@ -295,11 +312,82 @@ export class RedisMigrator extends EventEmitter {
     }
   }
 
-  public stop(): void {
+  private async enableRealtimeSync(): Promise<void> {
+    try {
+      // Enable keyspace notifications if not already enabled
+      const config = await this.source.config('GET', 'notify-keyspace-events');
+      const currentConfig = config[1] || '';
+      
+      if (!currentConfig.includes('A') || !currentConfig.includes('K') || !currentConfig.includes('E')) {
+        await this.source.config('SET', 'notify-keyspace-events', 'AKE');
+      }
+
+      // Subscribe to all keyspace events
+      await this.subscriber.psubscribe('__keyspace@0__:*');
+      
+      this.realtimeSyncEnabled = true;
+      
+      // Set up the event handler for real-time updates
+      this.subscriber.on('pmessage', async (_pattern, channel, message) => {
+        if (!this.realtimeSyncEnabled) return;
+        
+        const key = channel.split(':').slice(1).join(':');
+        const operation = message;
+
+        try {
+          switch (operation) {
+            case 'set':
+            case 'hset':
+            case 'sadd':
+            case 'zadd':
+            case 'lpush':
+            case 'rpush':
+              await this.migrateKey(key);
+              this.stats.processed++;
+              await this.updateCounts();
+              this.emit('keyProcessed', { key, operation: 'update' });
+              break;
+            case 'del':
+              await this.target.del(key);
+              this.emit('keyProcessed', { key, operation: 'delete' });
+              break;
+            case 'expire':
+              const ttl = await this.source.ttl(key);
+              if (ttl > 0) {
+                await this.target.expire(key, ttl);
+              }
+              this.emit('keyProcessed', { key, operation: 'expire' });
+              break;
+          }
+        } catch (error) {
+          console.error(`Error processing real-time update for key ${key}:`, error);
+          this.emit('error', error);
+        }
+      });
+    } catch (error) {
+      console.error('Error enabling real-time sync:', error);
+      throw error;
+    }
+  }
+
+  public async stop(): Promise<void> {
     this.initialScanRunning = false;
-    this.realtimeSyncEnabled = false;
     this.isRunning = false;
-    this.emit('stopped');
+    this.realtimeSyncEnabled = false;
+    
+    try {
+      // Unsubscribe from keyspace notifications
+      await this.subscriber.punsubscribe('__keyspace@0__:*');
+      
+      // Clear any pending updates
+      this.keyUpdateQueue.clear();
+      this.processingQueue = false;
+      
+      this.emit('stopped');
+    } catch (error) {
+      console.error('Error stopping migration:', error);
+      throw error;
+    }
   }
 
   public pauseSync(): void {
@@ -323,5 +411,66 @@ export class RedisMigrator extends EventEmitter {
     }
     await this.source.quit();
     await this.target.quit();
+  }
+
+  private setupRealtimeSync() {
+    // Configure Redis keyspace notifications on source
+    this.source.config('SET', 'notify-keyspace-events', 'KEA');
+
+    // Subscribe to keyspace notifications
+    const subscriber = this.source.duplicate();
+    subscriber.subscribe('__keyspace@0__:*', (err, count) => {
+      if (err) {
+        this.emit('error', new Error('Failed to subscribe to keyspace events'));
+        return;
+      }
+    });
+
+    // Handle changes
+    subscriber.on('message', async (channel, message) => {
+      const key = channel.split(':')[1];
+      try {
+        // Get the new value from source
+        const value = await this.source.get(key);
+        // Replicate to target
+        if (value !== null) {
+          await this.target.set(key, value);
+        } else {
+          await this.target.del(key);
+        }
+        
+        this.emit('realtimeSync', {
+          key,
+          operation: value === null ? 'delete' : 'set',
+        });
+      } catch (error) {
+        this.emit('error', error);
+      }
+    });
+  }
+
+  private async updateCounts(): Promise<void> {
+    try {
+      const currentDbSize = await this.source.dbsize();
+      this.stats.total = Number(currentDbSize);
+      this.stats.processed = Math.min(this.stats.processed, this.stats.total);
+      
+      this.emit('progress', {
+        processed: this.stats.processed,
+        total: this.stats.total,
+        percent: Math.min((this.stats.processed / this.stats.total) * 100, 100),
+        keysPerSecond: this.stats.keysPerSecond,
+      });
+    } catch (error) {
+      console.error('Error updating counts:', error);
+    }
+  }
+
+  private startPeriodicCountUpdate() {
+    setInterval(async () => {
+      if (this.realtimeSyncEnabled) {
+        await this.updateCounts();
+      }
+    }, 5000); // Update every 5 seconds
   }
 }

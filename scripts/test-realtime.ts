@@ -9,60 +9,70 @@ async function testRealTimeSync() {
     { host: 'localhost', port: 6380, password: '' }
   );
 
-  // Monitor migration progress
-  migrator.on('progress', (stats) => {
-    console.log(`Progress: ${stats.percent}% - ${stats.keysPerSecond} keys/sec`);
-  });
-
-  migrator.on('keyProcessed', (data) => {
-    console.log(`Processed key: ${data.key} (${data.operation})`);
-  });
-
-  migrator.on('error', (error) => {
-    console.error('Error:', error.message);
-  });
+  // Setup Redis connections
+  const source = new Redis(6379);
+  const target = new Redis(6380);
+  let counter = 0;
 
   // Start migration
   await migrator.start();
 
-  // Generate test data
-  const source = new Redis(6379);
-  let counter = 0;
+  // Monitor sync progress
+  const monitorInterval = setInterval(async () => {
+    const sourceCount = await source.dbsize();
+    const targetCount = await target.dbsize();
+    const syncPercentage = ((targetCount / sourceCount) * 100 || 0).toFixed(2);
+    
+    // Verify if the latest key exists in target
+    const latestKey = `test:${counter}`;
+    const targetValue = await target.get(latestKey);
+    const sourceValue = await source.get(latestKey);
+    const isSynced = targetValue === sourceValue;
+    
+    console.log(`\nSync Status:`);
+    console.log(`Source: ${sourceCount} keys`);
+    console.log(`Target: ${targetCount} keys`);
+    console.log(`Sync: ${syncPercentage}%`);
+    console.log(`Latest key "${latestKey}" synced: ${isSynced ? '✓' : '×'}`);
+    if (!isSynced) {
+      console.log(`Source value: ${sourceValue}`);
+      console.log(`Target value: ${targetValue}`);
+    }
+  }, 1000);
 
-  // Add test data every 100ms
-  const interval = setInterval(async () => {
+  // Add test data ONLY to source every 100ms
+  const dataInterval = setInterval(async () => {
     try {
-      const key = `test:${Date.now()}:${counter}`;
+      // Simplified key format for easier verification
+      const key = `test:${counter}`;
       await source.set(key, `value-${counter}`);
       counter++;
 
-      // Print stats every 10 keys
-      if (counter % 10 === 0) {
-        const sourceCount = await source.dbsize();
-        const targetCount = await new Redis(6380).dbsize();
-        console.log(`\nSource: ${sourceCount} keys`);
-        console.log(`Target: ${targetCount} keys`);
-        console.log(`Difference: ${sourceCount - targetCount} keys`);
-      }
-
-      // Stop after 1000 keys
       if (counter >= 1000) {
-        clearInterval(interval);
+        clearInterval(dataInterval);
         await cleanup();
       }
     } catch (error) {
       console.error('Error generating data:', error);
+      await cleanup();
     }
   }, 100);
 
   async function cleanup() {
     console.log('\nCleaning up...');
+    clearInterval(monitorInterval);
+    clearInterval(dataInterval);
+    await source.quit();
+    await target.quit();
     await migrator.cleanup();
     process.exit(0);
   }
 
-  // Handle interrupts
+
   process.on('SIGINT', cleanup);
 }
 
-testRealTimeSync().catch(console.error);
+testRealTimeSync().catch(async (error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
