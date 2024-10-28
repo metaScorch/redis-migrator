@@ -1,101 +1,405 @@
-import Image from "next/image";
+"use client";
+import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 
-export default function Home() {
+interface RedisConfig {
+  host: string;
+  port: string;
+  password?: string;
+  tls: boolean;
+}
+
+interface MigrationStatus {
+  isRunning: boolean;
+  progress: number;
+  keysProcessed: number;
+  totalKeys: number;
+  currentSpeed: number;
+  errors: string[];
+  lastUpdate?: Date;
+  recentOperations?: Array<{
+    key: string;
+    operation: string;
+    timestamp: Date;
+  }>;
+}
+
+interface PerformanceData {
+  timestamp: number;
+  speed: number;
+  keysProcessed: number;
+}
+
+export default function RedisMigration() {
+  const [source, setSource] = useState<RedisConfig>({
+    host: '',
+    port: '6379',
+    password: '',
+    tls: false,
+  });
+
+  const [target, setTarget] = useState<RedisConfig>({
+    host: '',
+    port: '6379',
+    password: '',
+    tls: false,
+  });
+
+  const [status, setStatus] = useState<MigrationStatus>({
+    isRunning: false,
+    progress: 0,
+    keysProcessed: 0,
+    totalKeys: 0,
+    currentSpeed: 0,
+    errors: [],
+  });
+
+  const [performanceHistory, setPerformanceHistory] = useState<PerformanceData[]>([]);
+  const [activeTab, setActiveTab] = useState('overview');
+
+  useEffect(() => {
+    if (status.isRunning) {
+      const eventSource = new EventSource('/api/migration/events');
+      
+      eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        setStatus(prev => ({
+          ...prev,
+          ...data,
+        }));
+      };
+
+      return () => {
+        eventSource.close();
+      };
+    }
+  }, [status.isRunning]);
+
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+
+    if (status.isRunning) {
+      // Initial poll
+      pollStatus();
+      
+      // Set up polling interval (every second)
+      pollInterval = setInterval(pollStatus, 1000);
+    }
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [status.isRunning]);
+
+  const startMigration = async () => {
+    try {
+      const response = await fetch('/api/migration/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, target }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to start migration');
+      }
+
+      setStatus(prev => ({ ...prev, isRunning: true, errors: [] }));
+      setPerformanceHistory([]);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setStatus(prev => ({
+        ...prev,
+        errors: [...prev.errors, errorMessage],
+      }));
+    }
+  };
+
+  const stopMigration = async () => {
+    try {
+      const response = await fetch('/api/migration/stop', { method: 'POST' });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to stop migration');
+      }
+
+      setStatus(prev => ({ ...prev, isRunning: false }));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setStatus(prev => ({
+        ...prev,
+        errors: [...prev.errors, errorMessage],
+      }));
+    }
+  };
+
+  const pollStatus = async () => {
+    try {
+      const response = await fetch('/api/migration/status');
+      const data = await response.json();
+      
+      setStatus(prev => ({ ...prev, ...data }));
+      
+      // Update performance history
+      setPerformanceHistory(prev => [
+        ...prev,
+        {
+          timestamp: Date.now(),
+          speed: data.currentSpeed,
+          keysProcessed: data.keysProcessed,
+        },
+      ].slice(-60)); // Keep last 60 seconds
+    } catch (error) {
+      console.error('Failed to fetch status:', error);
+    }
+  };
+
+  const formatDuration = (ms: number) => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  };
+
+  const estimateTimeRemaining = () => {
+    if (status.currentSpeed <= 0) return 'Calculating...';
+    const remainingKeys = status.totalKeys - status.keysProcessed;
+    const secondsRemaining = remainingKeys / status.currentSpeed;
+    return formatDuration(secondsRemaining * 1000);
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-6">Redis Migration Dashboard</h1>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Source Configuration */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Source Redis</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <Label>Host</Label>
+                <Input
+                  value={source.host}
+                  onChange={e => setSource(prev => ({ ...prev, host: e.target.value }))}
+                  placeholder="localhost"
+                />
+              </div>
+              <div>
+                <Label>Port</Label>
+                <Input
+                  value={source.port}
+                  onChange={e => setSource(prev => ({ ...prev, port: e.target.value }))}
+                  placeholder="6379"
+                />
+              </div>
+              <div>
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  value={source.password}
+                  onChange={e => setSource(prev => ({ ...prev, password: e.target.value }))}
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={source.tls}
+                  onCheckedChange={checked => setSource(prev => ({ ...prev, tls: checked }))}
+                />
+                <Label>TLS Enabled</Label>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        {/* Target Configuration */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Target Redis</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <Label>Host</Label>
+                <Input
+                  value={target.host}
+                  onChange={e => setTarget(prev => ({ ...prev, host: e.target.value }))}
+                  placeholder="localhost"
+                />
+              </div>
+              <div>
+                <Label>Port</Label>
+                <Input
+                  value={target.port}
+                  onChange={e => setTarget(prev => ({ ...prev, port: e.target.value }))}
+                  placeholder="6379"
+                />
+              </div>
+              <div>
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  value={target.password}
+                  onChange={e => setTarget(prev => ({ ...prev, password: e.target.value }))}
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={target.tls}
+                  onCheckedChange={checked => setTarget(prev => ({ ...prev, tls: checked }))}
+                />
+                <Label>TLS Enabled</Label>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Migration Controls & Status */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Migration Status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="performance">Performance</TabsTrigger>
+              <TabsTrigger value="operations">Recent Operations</TabsTrigger>
+              <TabsTrigger value="errors">Errors</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview">
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <div className="space-x-4">
+                    <Button
+                      onClick={startMigration}
+                      disabled={status.isRunning || !source.host || !target.host}
+                    >
+                      Start Migration
+                    </Button>
+                    <Button
+                      onClick={stopMigration}
+                      disabled={!status.isRunning}
+                      variant="destructive"
+                    >
+                      Stop Migration
+                    </Button>
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    {status.isRunning ? 'Migration in progress' : 'Migration stopped'}
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                  <div
+                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
+                    style={{ width: `${status.progress}%` }}
+                  ></div>
+                </div>
+
+                {/* Statistics */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <Label>Progress</Label>
+                    <div className="text-xl font-bold">{status.progress.toFixed(1)}%</div>
+                  </div>
+                  <div>
+                    <Label>Keys Processed</Label>
+                    <div className="text-xl font-bold">{status.keysProcessed.toLocaleString()}</div>
+                  </div>
+                  <div>
+                    <Label>Total Keys</Label>
+                    <div className="text-xl font-bold">{status.totalKeys.toLocaleString()}</div>
+                  </div>
+                  <div>
+                    <Label>Current Speed</Label>
+                    <div className="text-xl font-bold">{status.currentSpeed.toLocaleString()} keys/sec</div>
+                  </div>
+                  <div>
+                    <Label>Estimated Time Remaining</Label>
+                    <div className="text-xl font-bold">{estimateTimeRemaining()}</div>
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="performance">
+              <div className="w-full h-[300px]">
+                <LineChart
+                  width={800}
+                  height={300}
+                  data={performanceHistory}
+                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="timestamp"
+                    tickFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
+                  />
+                  <YAxis />
+                  <Tooltip
+                    labelFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="speed"
+                    name="Keys/Second"
+                    stroke="#8884d8"
+                  />
+                </LineChart>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="operations">
+              <div className="space-y-2">
+                {status.recentOperations?.map((op, index) => (
+                  <div key={index} className="flex justify-between items-center text-sm">
+                    <span>{op.key}</span>
+                    <span className="text-gray-500">{op.operation}</span>
+                    <span className="text-gray-500">
+                      {new Date(op.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="errors">
+              {status.errors.length > 0 ? (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    <ul className="list-disc pl-4">
+                      {status.errors.map((error, index) => (
+                        <li key={index}>{error}</li>
+                      ))}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <div className="text-gray-500">No errors reported</div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }

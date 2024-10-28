@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  redis-source:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--notify-keyspace-events", "AKE"]  # Changed to include all events
+    volumes:
+      - redis-source-data:/data
+
+  redis-target:
+    image: redis:latest
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-target-data:/data
+
+volumes:
+  redis-source-data:
+  redis-target-data:
