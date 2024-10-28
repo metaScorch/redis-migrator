@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { PerformanceChart } from '@/components/performance-chart';
 
 interface RedisConfig {
   host: string;
@@ -100,29 +101,41 @@ export default function RedisMigration() {
     };
   }, [status.isRunning]);
 
-  const startMigration = async () => {
-    try {
-      const response = await fetch('/api/migration/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source, target }),
-      });
+const startMigration = async () => {
+  try {
+    console.log('Starting migration...', { source, target });
+    const response = await fetch('/api/migration/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, target }),
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to start migration');
-      }
-
-      setStatus(prev => ({ ...prev, isRunning: true, errors: [] }));
-      setPerformanceHistory([]);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      setStatus(prev => ({
-        ...prev,
-        errors: [...prev.errors, errorMessage],
-      }));
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to start migration');
     }
-  };
+
+    const data = await response.json();
+    setStatus(prev => ({
+      ...prev,
+      isRunning: true,
+      errors: [],
+      progress: 0,
+      keysProcessed: 0,
+      totalKeys: 0,
+      currentSpeed: 0
+    }));
+    setPerformanceHistory([]);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    console.error('Migration error:', errorMessage);
+    setStatus(prev => ({
+      ...prev,
+      errors: [...prev.errors, errorMessage],
+      isRunning: false
+    }));
+  }
+};
 
   const stopMigration = async () => {
     try {
@@ -342,30 +355,7 @@ export default function RedisMigration() {
             </TabsContent>
 
             <TabsContent value="performance">
-              <div className="w-full h-[300px]">
-                <LineChart
-                  width={800}
-                  height={300}
-                  data={performanceHistory}
-                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="timestamp"
-                    tickFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
-                  />
-                  <YAxis />
-                  <Tooltip
-                    labelFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="speed"
-                    name="Keys/Second"
-                    stroke="#8884d8"
-                  />
-                </LineChart>
-              </div>
+              <PerformanceChart data={performanceHistory} />
             </TabsContent>
 
             <TabsContent value="operations">

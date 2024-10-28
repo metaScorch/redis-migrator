@@ -5,8 +5,8 @@ async function testRealTimeSync() {
   console.log('Starting real-time sync test...');
 
   const migrator = new RedisMigrator(
-    { host: 'localhost', port: 6379 },
-    { host: 'localhost', port: 6380 }
+    { host: 'localhost', port: 6379, password: '' },
+    { host: 'localhost', port: 6380, password: '' }
   );
 
   // Monitor migration progress

@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+const Redis = require('ioredis');
 
 async function generateTestData() {
   // Connect to local Redis
