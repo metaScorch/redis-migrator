@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { PerformanceChart } from '@/components/performance-chart';
+import { createClient } from '@supabase/supabase-js';
 
 interface RedisConfig {
   host: string;
@@ -35,12 +36,34 @@ interface MigrationStatus {
     operation: string;
     timestamp: Date;
   }>;
+  totalSize: number;
+  migrationId?: string;
 }
 
 interface PerformanceData {
   timestamp: number;
   speed: number;
   keysProcessed: number;
+}
+
+interface MigrationStats {
+  totalSize: number;  // in bytes
+  keysProcessed: number;
+  totalKeys: number;
+  currentSpeed: number;
+  startTime?: Date;
+  endTime?: Date;
+}
+
+interface MigrationLog {
+  id?: string;
+  migration_id: string;
+  source_host: string;
+  target_host: string;
+  status: 'started' | 'completed' | 'failed' | 'stopped';
+  stats: MigrationStats;
+  error?: string;
+  created_at?: Date;
 }
 
 export default function RedisMigration() {
@@ -65,6 +88,7 @@ export default function RedisMigration() {
     totalKeys: 0,
     currentSpeed: 0,
     errors: [],
+    totalSize: 0,
   });
 
   const [performanceHistory, setPerformanceHistory] = useState<PerformanceData[]>([]);
@@ -128,7 +152,8 @@ const startMigration = async () => {
       progress: 0,
       keysProcessed: 0,
       totalKeys: 0,
-      currentSpeed: 0
+      currentSpeed: 0,
+      totalSize: 0,
     }));
     setPerformanceHistory([]);
   } catch (error: unknown) {
