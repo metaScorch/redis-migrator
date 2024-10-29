@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { RedisMigrator } from '../../../../lib/redis-migrator';
 import { migrator, migrationStatus, setMigrator } from '../../../../lib/migration-store';
 
+interface MigrationStatus {
+  isRunning: boolean;
+  progress: number;
+  keysProcessed: number;
+  totalKeys: number;
+  currentSpeed: number;
+  lastUpdate: Date;
+  errors: string[];
+  recentOperations: Array<{ key: string; operation: string; timestamp: Date }>;
+  recentChanges: Array<{ key: string }>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const action = request.nextUrl.pathname.split('/').pop();
@@ -29,8 +41,7 @@ export async function POST(request: NextRequest) {
           port: parseInt(target.port) || 6379,
           password: target.password,
           tls: target.tls || false,
-        },
-        { enableRealtimeSync: true }
+        }
       );
 
       migratorInstance.on('progress', (stats) => {
@@ -49,18 +60,6 @@ export async function POST(request: NextRequest) {
             timestamp: new Date(),
           },
           ...(migrationStatus.recentOperations || []).slice(0, 99)
-        ];
-      });
-
-      // Add new event handler for realtime changes
-      migratorInstance.on('realtimeSync', (data) => {
-        migrationStatus.recentChanges = [
-          {
-            key: data.key,
-            operation: data.operation,
-            timestamp: new Date(),
-          },
-          ...(migrationStatus.recentChanges || []).slice(0, 99)
         ];
       });
 

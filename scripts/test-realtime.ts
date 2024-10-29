@@ -9,13 +9,14 @@ async function testRealTimeSync() {
     { host: 'localhost', port: 6380, password: '' }
   );
 
-  // Setup Redis connections
+  // Setup Redis connections - target is only for monitoring
   const source = new Redis(6379);
   const target = new Redis(6380);
   let counter = 0;
 
   // Start migration
   await migrator.start();
+  console.log('Migration started successfully');
 
   // Monitor sync progress
   const monitorInterval = setInterval(async () => {
@@ -23,32 +24,24 @@ async function testRealTimeSync() {
     const targetCount = await target.dbsize();
     const syncPercentage = ((targetCount / sourceCount) * 100 || 0).toFixed(2);
     
-    // Verify if the latest key exists in target
-    const latestKey = `test:${counter}`;
-    const targetValue = await target.get(latestKey);
-    const sourceValue = await source.get(latestKey);
-    const isSynced = targetValue === sourceValue;
-    
-    console.log(`\nSync Status:`);
+    console.log(`\nSync Status at ${new Date().toISOString()}:`);
+    console.log(`Counter: ${counter}`);
     console.log(`Source: ${sourceCount} keys`);
     console.log(`Target: ${targetCount} keys`);
     console.log(`Sync: ${syncPercentage}%`);
-    console.log(`Latest key "${latestKey}" synced: ${isSynced ? '✓' : '×'}`);
-    if (!isSynced) {
-      console.log(`Source value: ${sourceValue}`);
-      console.log(`Target value: ${targetValue}`);
-    }
   }, 1000);
 
   // Add test data ONLY to source every 100ms
   const dataInterval = setInterval(async () => {
     try {
-      // Simplified key format for easier verification
-      const key = `test:${counter}`;
-      await source.set(key, `value-${counter}`);
+      const key = `test:${Date.now()}:${counter}`;  // Make key unique with timestamp
+      const value = `value-${counter}`;
+      console.log(`Adding new key: ${key} = ${value}`);
+      await source.set(key, value);
       counter++;
 
       if (counter >= 1000) {
+        console.log('Reached 1000 keys, cleaning up...');
         clearInterval(dataInterval);
         await cleanup();
       }

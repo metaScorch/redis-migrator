@@ -315,7 +315,7 @@ export class RedisMigrator extends EventEmitter {
   private async enableRealtimeSync(): Promise<void> {
     try {
       // Enable keyspace notifications if not already enabled
-      const config = await this.source.config('GET', 'notify-keyspace-events');
+      const config = await this.source.config('GET', 'notify-keyspace-events') as [string, string];
       const currentConfig = config[1] || '';
       
       if (!currentConfig.includes('A') || !currentConfig.includes('K') || !currentConfig.includes('E')) {
