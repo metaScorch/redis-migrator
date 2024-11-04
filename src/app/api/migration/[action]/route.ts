@@ -12,6 +12,7 @@ interface MigrationStatus {
   errors: string[];
   recentOperations: Array<{ key: string; operation: string; timestamp: Date }>;
   recentChanges: Array<{ key: string }>;
+  totalSize: number;
 }
 
 export async function POST(request: NextRequest) {
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
     
     if (action === 'start') {
       const body = await request.json();
-      const { source, target } = body;
+      const { source, target, migrationId } = body;
 
       if (migrationStatus.isRunning) {
         return NextResponse.json(
@@ -41,7 +42,9 @@ export async function POST(request: NextRequest) {
           port: parseInt(target.port) || 6379,
           password: target.password,
           tls: target.tls || false,
-        }
+        },
+        migrationId,
+        { enableRealtimeSync: true }
       );
 
       migratorInstance.on('progress', (stats) => {
@@ -49,6 +52,7 @@ export async function POST(request: NextRequest) {
         migrationStatus.keysProcessed = stats.processed;
         migrationStatus.totalKeys = stats.total;
         migrationStatus.currentSpeed = stats.keysPerSecond;
+        migrationStatus.totalSize = stats.totalSize || 0;
         migrationStatus.lastUpdate = new Date();
       });
 

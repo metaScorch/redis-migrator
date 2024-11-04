@@ -94,6 +94,11 @@ export default function RedisMigration() {
   const [performanceHistory, setPerformanceHistory] = useState<PerformanceData[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
 
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
+  );
+
   useEffect(() => {
     if (status.isRunning) {
       const eventSource = new EventSource('/api/migration/events');
@@ -130,42 +135,65 @@ export default function RedisMigration() {
     };
   }, [status.isRunning]);
 
-const startMigration = async () => {
-  try {
-    console.log('Starting migration...', { source, target });
-    const response = await fetch('/api/migration/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, target }),
-    });
+  const startMigration = async () => {
+    try {
+      const migrationId = crypto.randomUUID();
+      const response = await fetch('/api/migration/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, target, migrationId }),
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to start migration');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to start migration');
+      }
+
+      const data = await response.json();
+      
+      const timestamp = new Date().toISOString();
+      const { error: logsError } = await supabase
+        .from('migration_logs')
+        .insert({
+          migration_id: migrationId,
+          source_host: source.host,
+          target_host: target.host,
+          status: 'started',
+          stats: {
+            totalSize: data.totalSize || 0,
+            keysProcessed: 0,
+            totalKeys: data.totalKeys || 0,
+            currentSpeed: 0,
+            startTime: timestamp
+          }
+        });
+
+      if (logsError) {
+        throw new Error(`Failed to create migration log: ${logsError.message}`);
+      }
+
+      setStatus(prev => ({
+        ...prev,
+        isRunning: true,
+        errors: [],
+        progress: 0,
+        keysProcessed: 0,
+        totalKeys: data.totalKeys || 0,
+        totalSize: data.totalSize || 0,
+        currentSpeed: 0,
+        migrationId
+      }));
+      setPerformanceHistory([]);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error('Migration error:', errorMessage);
+      setStatus(prev => ({
+        ...prev,
+        errors: [...prev.errors, errorMessage],
+        isRunning: false
+      }));
     }
-
-    const data = await response.json();
-    setStatus(prev => ({
-      ...prev,
-      isRunning: true,
-      errors: [],
-      progress: 0,
-      keysProcessed: 0,
-      totalKeys: 0,
-      currentSpeed: 0,
-      totalSize: 0,
-    }));
-    setPerformanceHistory([]);
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    console.error('Migration error:', errorMessage);
-    setStatus(prev => ({
-      ...prev,
-      errors: [...prev.errors, errorMessage],
-      isRunning: false
-    }));
-  }
-};
+  };
 
   const stopMigration = async () => {
     try {
@@ -174,6 +202,23 @@ const startMigration = async () => {
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.message || 'Failed to stop migration');
+      }
+
+      // Log migration stop to Supabase
+      if (status.migrationId) {
+        await supabase.from('migration_logs').insert({
+          migration_id: status.migrationId,
+          source_host: source.host,
+          target_host: target.host,
+          status: 'stopped',
+          stats: {
+            totalSize: status.totalSize,
+            keysProcessed: status.keysProcessed,
+            totalKeys: status.totalKeys,
+            currentSpeed: status.currentSpeed,
+            endTime: new Date(),
+          }
+        });
       }
 
       setStatus(prev => ({ ...prev, isRunning: false }));
@@ -221,9 +266,24 @@ const startMigration = async () => {
     return formatDuration(secondsRemaining * 1000);
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">Redis Migration Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+        <img src="/images/redswish-logo.png" alt="RedSwish Logo" className="h-8 w-8" />
+        <div>
+          <span className="text-red-600">Red</span>
+          <span>Zwitch</span>
+        </div>
+        - Redis Migration Utility Tool
+      </h1>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Source Configuration */}
@@ -380,6 +440,10 @@ const startMigration = async () => {
                   <div>
                     <Label>Estimated Time Remaining</Label>
                     <div className="text-xl font-bold">{estimateTimeRemaining()}</div>
+                  </div>
+                  <div>
+                    <Label>Total Size</Label>
+                    <div className="text-xl font-bold">{formatBytes(status.totalSize)}</div>
                   </div>
                 </div>
               </div>
