@@ -822,55 +822,74 @@ export default function RedisMigration() {
       <div id="pricing" className="mt-12 mb-8">
         <h2 className="text-2xl font-bold mb-6">Simple, Transparent Pricing</h2>
         
-        <div className="overflow-x-auto rounded-xl shadow-lg">
-          <table className="w-full border-collapse bg-white">
-            <thead>
-              <tr className="bg-gray-50">
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Plan Type</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Keys Processed</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Cost per Key</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {pricingTiers.map((tier) => (
-                <tr 
-                  key={tier.name} 
-                  className="hover:bg-gray-50 transition-colors"
-                >
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{tier.name}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    Up to {tier.maxKeys.toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {tier.costPerKey ? `$${tier.costPerKey.toFixed(4)}` : 'Free'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Update the unlimited plan section with reduced height */}
-        <div className="text-center my-12">
-          <div className="text-xl font-bold text-gray-400 mb-8">— OR —</div>
-          <div className="mt-6 p-6 border-2 border-red-600 rounded-2xl shadow-lg w-full">
-            <div className="flex justify-center items-center gap-2 mb-2">
-              <h3 className="text-2xl font-bold text-red-600">Unlimited Plan</h3>
-              <span className="px-2 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
-                Popular
-              </span>
+        <div className="grid md:grid-cols-5 gap-12">
+          {/* Pay As You Go Table - Takes 2 columns */}
+          <div className="md:col-span-2">
+            <div className="mb-4">
+              <h3 className="text-xl font-semibold text-gray-900">Pay As You Go</h3>
+              <p className="text-sm text-gray-500 mt-1">Perfect for small to medium migrations</p>
             </div>
-            <p className="text-5xl font-bold text-gray-900 mb-2">
-              $799
-              <span className="text-lg text-gray-600 ml-2">/year</span>
-            </p>
-            <p className="text-gray-600 text-lg">Unlimited Keys & Migrations</p>
-            <Button className="mt-3" size="lg">Get Started</Button>
+            <div className="overflow-x-auto rounded-xl shadow-lg border border-gray-200">
+              <table className="w-full border-collapse bg-white">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Keys Processed</th>
+                    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Cost per Key</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {pricingTiers.map((tier) => (
+                    <tr 
+                      key={tier.name} 
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        Up to {tier.maxKeys.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {tier.costPerKey ? `$${tier.costPerKey.toFixed(4)}` : 'Free'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* OR Separator - Takes 1 column */}
+          <div className="md:col-span-1 flex flex-col items-center justify-center">
+            <div className="w-px h-32 bg-gray-200"></div>
+            <div className="my-4 text-base font-medium text-gray-400">OR</div>
+            <div className="w-px h-32 bg-gray-200"></div>
+          </div>
+
+          {/* Unlimited Plan - Takes 2 columns */}
+          <div className="md:col-span-2">
+            <div className="p-6 border-2 border-red-600 rounded-2xl shadow-lg h-full flex flex-col justify-center">
+              <div className="flex flex-col items-center gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-bold text-red-600">Unlimited Plan</h3>
+                  <span className="px-2 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+                    Popular
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500">For large-scale migrations</p>
+              </div>
+              <div className="text-center">
+                <p className="text-4xl font-bold text-gray-900 mb-2">
+                  $799
+                  <span className="text-base text-gray-600 ml-1">/year</span>
+                </p>
+                <p className="text-gray-600 text-sm mb-6">Unlimited Keys & Migrations</p>
+                <Button size="lg" className="w-full">
+                  Get Started
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* Calculator below */}
         <Card className="mt-12 shadow-lg">
           <CardHeader>
             <CardTitle className="text-xl">Cost Calculator</CardTitle>
