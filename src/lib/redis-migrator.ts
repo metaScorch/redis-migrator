@@ -513,7 +513,7 @@ export class RedisMigrator extends EventEmitter {
       }
     });
 
-    subscriber.on('message', async (channel, _message) => {
+    subscriber.on('message', async (channel) => {
       const key = channel.split(':')[1];
       try {
         const value = await this.source.get(key);
@@ -618,28 +618,12 @@ export class RedisMigrator extends EventEmitter {
           status: this.isRunning ? 'running' : 'completed'
         };
 
-        // Simple update with latest metrics
-        const { error: logsError } = await this.supabase
-          .from('migration_logs')
-          .update({
-            stats: {
-              totalSize: this.stats.totalSize,
-              keysProcessed: this.stats.processed,
-              totalKeys: this.stats.total,
-              currentSpeed: this.stats.keysPerSecond,
-              lastUpdated: timestamp
-            },
-            migration_metrics: metrics  // Just the latest metrics
-          })
-          .eq('migration_id', this.migrationId);
-
-        if (logsError) {
-          console.error('Error updating migration logs:', logsError);
-        }
+        // Emit metrics event instead of trying to use Supabase
+        this.emit('metrics', metrics);
 
         this.lastMetricLog = now;
       } catch (error) {
-        console.error('Error logging metrics to Supabase:', error);
+        console.error('Error logging metrics:', error);
       }
     }
   }

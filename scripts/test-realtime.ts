@@ -8,8 +8,8 @@ async function testRealTimeSync() {
   const migrator = new RedisMigrator(
     { host: 'localhost', port: 6379, password: '', tls: false },
     { host: 'localhost', port: 6380, password: '', tls: false },
-    { enableRealtimeSync: true },
-    new EventEmitter()
+    'realtime',
+    { enableRealtimeSync: true }
   );
 
   // Setup Redis connections - target is only for monitoring
