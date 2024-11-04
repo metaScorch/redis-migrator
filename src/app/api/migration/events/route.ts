@@ -1,4 +1,7 @@
 // src/app/api/migration/events/route.ts
+export const dynamic = 'force-dynamic';
+export const runtime = 'edge';
+
 import { migrator } from '@/lib/migration-store';
 
 interface EventData {

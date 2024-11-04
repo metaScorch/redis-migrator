@@ -2,22 +2,28 @@
   "name": "redis-migration-ui",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "generate-data": "ts-node scripts/generate-test-data.ts",
-    "monitor": "ts-node scripts/monitor-migration.ts",
-    "verify": "ts-node scripts/verify-migration.ts",
-    "test-realtime": "ts-node scripts/test-realtime.ts",
-    "monitor-sync": "ts-node scripts/monitor-sync.ts"
+    "generate-data": "NODE_OPTIONS=\"--loader ts-node/esm\" ts-node scripts/generate-test-data.ts",
+    "monitor": "ts-node --esm scripts/monitor-migration.ts",
+    "verify": "ts-node --esm scripts/verify-migration.ts",
+    "test-realtime": "tsx scripts/test-realtime.ts",
+    "monitor-sync": "ts-node --esm scripts/monitor-sync.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-switch": "^1.1.1",
     "@radix-ui/react-tabs": "^1.1.1",
+    "@supabase/supabase-js": "^2.45.6",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "dotenv": "^16.4.5",
@@ -36,11 +42,13 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/react-native": "^0.73.0",
+    "autoprefixer": "^10.4.20",
     "eslint": "^8",
     "eslint-config-next": "15.0.1",
-    "postcss": "^8",
-    "tailwindcss": "^3.4.1",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }

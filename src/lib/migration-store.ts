@@ -8,8 +8,8 @@ export const migrationStatus = {
   keysProcessed: 0,
   totalKeys: 0,
   currentSpeed: 0,
+  lastUpdate: new Date(),
   errors: [] as string[],
-  lastUpdate: null as Date | null,
   recentOperations: [] as Array<{
     key: string;
     operation: string;

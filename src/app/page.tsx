@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { PerformanceChart } from '@/components/performance-chart';
+import { createClient } from '@supabase/supabase-js';
 
 interface RedisConfig {
   host: string;
@@ -29,12 +31,39 @@ interface MigrationStatus {
     operation: string;
     timestamp: Date;
   }>;
+  recentChanges?: Array<{
+    key: string;
+    operation: string;
+    timestamp: Date;
+  }>;
+  totalSize: number;
+  migrationId?: string;
 }
 
 interface PerformanceData {
   timestamp: number;
   speed: number;
   keysProcessed: number;
+}
+
+interface MigrationStats {
+  totalSize: number;  // in bytes
+  keysProcessed: number;
+  totalKeys: number;
+  currentSpeed: number;
+  startTime?: Date;
+  endTime?: Date;
+}
+
+interface MigrationLog {
+  id?: string;
+  migration_id: string;
+  source_host: string;
+  target_host: string;
+  status: 'started' | 'completed' | 'failed' | 'stopped';
+  stats: MigrationStats;
+  error?: string;
+  created_at?: Date;
 }
 
 export default function RedisMigration() {
@@ -59,10 +88,16 @@ export default function RedisMigration() {
     totalKeys: 0,
     currentSpeed: 0,
     errors: [],
+    totalSize: 0,
   });
 
   const [performanceHistory, setPerformanceHistory] = useState<PerformanceData[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
+  );
 
   useEffect(() => {
     if (status.isRunning) {
@@ -102,24 +137,60 @@ export default function RedisMigration() {
 
   const startMigration = async () => {
     try {
+      const migrationId = crypto.randomUUID();
       const response = await fetch('/api/migration/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source, target }),
+        body: JSON.stringify({ source, target, migrationId }),
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to start migration');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to start migration');
       }
 
-      setStatus(prev => ({ ...prev, isRunning: true, errors: [] }));
+      const data = await response.json();
+      
+      const timestamp = new Date().toISOString();
+      const { error: logsError } = await supabase
+        .from('migration_logs')
+        .insert({
+          migration_id: migrationId,
+          source_host: source.host,
+          target_host: target.host,
+          status: 'started',
+          stats: {
+            totalSize: data.totalSize || 0,
+            keysProcessed: 0,
+            totalKeys: data.totalKeys || 0,
+            currentSpeed: 0,
+            startTime: timestamp
+          }
+        });
+
+      if (logsError) {
+        throw new Error(`Failed to create migration log: ${logsError.message}`);
+      }
+
+      setStatus(prev => ({
+        ...prev,
+        isRunning: true,
+        errors: [],
+        progress: 0,
+        keysProcessed: 0,
+        totalKeys: data.totalKeys || 0,
+        totalSize: data.totalSize || 0,
+        currentSpeed: 0,
+        migrationId
+      }));
       setPerformanceHistory([]);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error('Migration error:', errorMessage);
       setStatus(prev => ({
         ...prev,
         errors: [...prev.errors, errorMessage],
+        isRunning: false
       }));
     }
   };
@@ -131,6 +202,23 @@ export default function RedisMigration() {
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.message || 'Failed to stop migration');
+      }
+
+      // Log migration stop to Supabase
+      if (status.migrationId) {
+        await supabase.from('migration_logs').insert({
+          migration_id: status.migrationId,
+          source_host: source.host,
+          target_host: target.host,
+          status: 'stopped',
+          stats: {
+            totalSize: status.totalSize,
+            keysProcessed: status.keysProcessed,
+            totalKeys: status.totalKeys,
+            currentSpeed: status.currentSpeed,
+            endTime: new Date(),
+          }
+        });
       }
 
       setStatus(prev => ({ ...prev, isRunning: false }));
@@ -178,9 +266,24 @@ export default function RedisMigration() {
     return formatDuration(secondsRemaining * 1000);
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">Redis Migration Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+        <img src="/images/redswish-logo.png" alt="RedSwish Logo" className="h-8 w-8" />
+        <div>
+          <span className="text-red-600">Red</span>
+          <span>Zwitch</span>
+        </div>
+        - Redis Migration Utility Tool
+      </h1>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Source Configuration */}
@@ -282,6 +385,7 @@ export default function RedisMigration() {
               <TabsTrigger value="performance">Performance</TabsTrigger>
               <TabsTrigger value="operations">Recent Operations</TabsTrigger>
               <TabsTrigger value="errors">Errors</TabsTrigger>
+              <TabsTrigger value="realtime">Realtime Changes</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">
@@ -337,35 +441,16 @@ export default function RedisMigration() {
                     <Label>Estimated Time Remaining</Label>
                     <div className="text-xl font-bold">{estimateTimeRemaining()}</div>
                   </div>
+                  <div>
+                    <Label>Total Size</Label>
+                    <div className="text-xl font-bold">{formatBytes(status.totalSize)}</div>
+                  </div>
                 </div>
               </div>
             </TabsContent>
 
             <TabsContent value="performance">
-              <div className="w-full h-[300px]">
-                <LineChart
-                  width={800}
-                  height={300}
-                  data={performanceHistory}
-                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="timestamp"
-                    tickFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
-                  />
-                  <YAxis />
-                  <Tooltip
-                    labelFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="speed"
-                    name="Keys/Second"
-                    stroke="#8884d8"
-                  />
-                </LineChart>
-              </div>
+              <PerformanceChart data={performanceHistory} />
             </TabsContent>
 
             <TabsContent value="operations">
@@ -396,6 +481,20 @@ export default function RedisMigration() {
               ) : (
                 <div className="text-gray-500">No errors reported</div>
               )}
+            </TabsContent>
+
+            <TabsContent value="realtime">
+              <div className="space-y-2">
+                {status.recentChanges?.map((change, index) => (
+                  <div key={index} className="flex justify-between items-center text-sm">
+                    <span>{change.key}</span>
+                    <span className="text-gray-500">{change.operation}</span>
+                    <span className="text-gray-500">
+                      {new Date(change.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </TabsContent>
           </Tabs>
         </CardContent>
