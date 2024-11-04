@@ -15,6 +15,8 @@ export const migrationStatus = {
     operation: string;
     timestamp: Date;
   }>,
+  recentChanges: [] as Array<{ key: string }>,
+  totalSize: 0,
 };
 
 export function setMigrator(instance: RedisMigrator | null) {

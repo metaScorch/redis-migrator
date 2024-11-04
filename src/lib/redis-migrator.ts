@@ -1,6 +1,5 @@
 import Redis from 'ioredis';
 import { EventEmitter } from 'events';
-import { createClient } from '@supabase/supabase-js';
 
 interface RedisConfig {
   host: string;
@@ -42,69 +41,75 @@ interface MigrationMetrics {
 }
 
 export class RedisMigrator extends EventEmitter {
-  public source: Redis;
+  private source: Redis;
   private target: Redis;
-  private subscriber: Redis;
-  private stats: MigrationStats;
-  private initialScanRunning: boolean = false;
-  private realtimeSyncEnabled: boolean = false;
-  private scanCursor: string = '0';
-  private batchSize: number = 1000;
-  private keyUpdateQueue: Set<string> = new Set();
-  private processingQueue: boolean = false;
-  private isRunning: boolean = false;
-  private supabase;
+  private options: MigratorOptions;
   private migrationId: string;
-  private lastMetricLog: number = 0;
-  private readonly METRIC_LOG_INTERVAL = 5000; // Log every 5 seconds
+  private stats: MigrationStats = {
+    processed: 0,
+    total: 0,
+    errors: [],
+    startTime: Date.now(),
+    keysPerSecond: 0,
+    totalSize: 0
+  };
+  private isRunning = false;
+  private initialScanRunning = false;
+  private realtimeSyncEnabled = false;
+  private subscriber: Redis | null = null;
+  private keyUpdateQueue = new Set<string>();
+  private processingQueue = false;
+  private scanCursor = '0';
+  private lastMetricLog = 0;
+  private readonly METRIC_LOG_INTERVAL = 5000;
 
   constructor(
     sourceConfig: RedisConfig,
     targetConfig: RedisConfig,
     migrationId: string,
-    options: MigratorOptions = {}
+    options: MigratorOptions = { enableRealtimeSync: false }
   ) {
     super();
-    this.migrationId = migrationId;
-    this.supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
-    );
+
     this.source = new Redis({
       host: sourceConfig.host,
       port: sourceConfig.port,
       password: sourceConfig.password,
       tls: sourceConfig.tls ? {} : undefined,
+      retryStrategy: () => null, // Disable auto-retry
+      maxRetriesPerRequest: 1,
     });
-
+    
     this.target = new Redis({
       host: targetConfig.host,
       port: targetConfig.port,
       password: targetConfig.password,
       tls: targetConfig.tls ? {} : undefined,
+      retryStrategy: () => null, // Disable auto-retry
+      maxRetriesPerRequest: 1,
     });
 
-    this.subscriber = this.source.duplicate();
+    this.migrationId = migrationId;
+    this.options = options;
 
-    this.stats = {
-      processed: 0,
-      total: 0,
-      errors: [],
-      startTime: 0,
-      keysPerSecond: 0,
-      totalSize: 0,
-    };
+    // Add error handlers
+    this.source.on('error', (err) => {
+      console.error('Source Redis error:', err);
+      this.emit('error', new Error(`Source Redis error: ${err.message}`));
+    });
 
-    this.setupKeyspaceNotifications();
-
-    if (options.enableRealtimeSync) {
-      this.setupRealtimeSync();
-      this.startPeriodicCountUpdate();
-    }
+    this.target.on('error', (err) => {
+      console.error('Target Redis error:', err);
+      this.emit('error', new Error(`Target Redis error: ${err.message}`));
+    });
   }
 
   private async setupKeyspaceNotifications() {
     try {
+      if (!this.subscriber) {
+        throw new Error('Subscriber not initialized');
+      }
+      
       await this.source.config('SET', 'notify-keyspace-events', 'AKE');
       await this.subscriber.psubscribe('__keyspace@0__:*');
       
@@ -142,14 +147,14 @@ export class RedisMigrator extends EventEmitter {
                 break;
             }
           }
-        } catch (error) {
-          console.error(`Error processing operation ${operation} for key ${key}:`, error);
-          this.emit('error', error);
+        } catch (err) {
+          console.error(`Error processing operation ${operation} for key ${key}:`, err);
+          this.emit('error', err);
         }
       });
 
-    } catch (error) {
-      const redisError = error as RedisError;
+    } catch (err) {
+      const redisError = err as RedisError;
       const errorMessage = redisError?.message || 'Unknown error during keyspace notification setup';
       this.stats.errors.push(`Failed to setup keyspace notifications: ${errorMessage}`);
       this.emit('error', redisError);
@@ -300,117 +305,128 @@ export class RedisMigrator extends EventEmitter {
       throw new Error('Initial migration already in progress');
     }
 
-    this.initialScanRunning = true;
-    this.isRunning = true;
-    this.stats.startTime = Date.now();
-    this.scanCursor = '0';
-    this.stats.processed = 0;
-    this.stats.errors = [];
-
     try {
-      // Enable real-time sync before starting the initial scan
-      await this.enableRealtimeSync();
-
-      const dbsize = await this.source.dbsize();
-      this.stats.total = Number(dbsize);
+      // Validate connections before starting
+      await this.validateConnections();
       
-      // Increase batch size for better performance
-      const PIPELINE_BATCH_SIZE = 5000;
+      // Initialize subscriber after validation
+      await this.initializeSubscriber();
       
-      while (this.initialScanRunning && this.isRunning) {
-        const [cursor, keys] = await this.source.scan(
-          this.scanCursor,
-          'COUNT',
-          PIPELINE_BATCH_SIZE
-        );
+      this.initialScanRunning = true;
+      this.isRunning = true;
+      this.stats.startTime = Date.now();
+      this.scanCursor = '0';
+      this.stats.processed = 0;
+      this.stats.errors = [];
 
-        this.scanCursor = cursor;
+      try {
+        // Enable real-time sync before starting the initial scan
+        await this.enableRealtimeSync();
 
-        // Process keys in smaller chunks to avoid memory issues
-        const chunkSize = 1000;
-        for (let i = 0; i < keys.length; i += chunkSize) {
-          const keyChunk = keys.slice(i, i + chunkSize);
-          
-          // Use pipeline for better performance
-          const pipeline = this.target.pipeline();
-          
-          await Promise.all(
-            keyChunk.map(async (key) => {
-              try {
-                const keyType = await this.source.type(key);
-                const ttl = await this.source.ttl(key);
-
-                switch (keyType) {
-                  case 'string':
-                    const value = await this.source.get(key);
-                    if (value !== null) {
-                      pipeline.set(key, value);
-                    }
-                    break;
-                  case 'hash':
-                    const hash = await this.source.hgetall(key);
-                    if (Object.keys(hash).length > 0) {
-                      pipeline.hmset(key, hash);
-                    }
-                    break;
-                  // ... other cases remain the same ...
-                }
-
-                if (ttl > 0) {
-                  pipeline.expire(key, ttl);
-                }
-
-                this.stats.processed++;
-                const keySize = await this.calculateTotalSize(key);
-                this.stats.totalSize += keySize;
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                this.stats.errors.push(`Error processing key ${key}: ${errorMessage}`);
-              }
-            })
+        const dbsize = await this.source.dbsize();
+        this.stats.total = Number(dbsize);
+        
+        // Increase batch size for better performance
+        const PIPELINE_BATCH_SIZE = 5000;
+        
+        while (this.initialScanRunning && this.isRunning) {
+          const [cursor, keys] = await this.source.scan(
+            this.scanCursor,
+            'COUNT',
+            PIPELINE_BATCH_SIZE
           );
 
-          // Execute pipeline
-          await pipeline.exec();
-          
-          // Update metrics less frequently
-          if (this.stats.processed % 1000 === 0) {
-            await this.logMetrics();
-            this.updateSpeed();
-            this.emit('progress', {
-              processed: this.stats.processed,
-              total: this.stats.total,
-              percent: Math.min((this.stats.processed / this.stats.total) * 100, 100),
-              keysPerSecond: this.stats.keysPerSecond,
-              totalSize: this.stats.totalSize
-            });
+          this.scanCursor = cursor;
+
+          // Process keys in smaller chunks to avoid memory issues
+          const chunkSize = 1000;
+          for (let i = 0; i < keys.length; i += chunkSize) {
+            const keyChunk = keys.slice(i, i + chunkSize);
+            
+            // Use pipeline for better performance
+            const pipeline = this.target.pipeline();
+            
+            await Promise.all(
+              keyChunk.map(async (key) => {
+                try {
+                  const keyType = await this.source.type(key);
+                  const ttl = await this.source.ttl(key);
+
+                  switch (keyType) {
+                    case 'string':
+                      const value = await this.source.get(key);
+                      if (value !== null) {
+                        pipeline.set(key, value);
+                      }
+                      break;
+                    case 'hash':
+                      const hash = await this.source.hgetall(key);
+                      if (Object.keys(hash).length > 0) {
+                        pipeline.hmset(key, hash);
+                      }
+                      break;
+                    // ... other cases remain the same ...
+                  }
+
+                  if (ttl > 0) {
+                    pipeline.expire(key, ttl);
+                  }
+
+                  this.stats.processed++;
+                  const keySize = await this.calculateTotalSize(key);
+                  this.stats.totalSize += keySize;
+                } catch (error) {
+                  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                  this.stats.errors.push(`Error processing key ${key}: ${errorMessage}`);
+                }
+              })
+            );
+
+            // Execute pipeline
+            await pipeline.exec();
+            
+            // Update metrics less frequently
+            if (this.stats.processed % 1000 === 0) {
+              await this.logMetrics();
+              this.updateSpeed();
+              this.emit('progress', {
+                processed: this.stats.processed,
+                total: this.stats.total,
+                percent: Math.min((this.stats.processed / this.stats.total) * 100, 100),
+                keysPerSecond: this.stats.keysPerSecond,
+                totalSize: this.stats.totalSize
+              });
+            }
+          }
+
+          if (cursor === '0') {
+            break;
           }
         }
 
-        if (cursor === '0') {
-          break;
+        this.initialScanRunning = false;
+        this.emit('scanComplete');
+
+        // Keep real-time sync running after initial scan completes
+        if (this.isRunning) {
+          this.emit('progress', {
+            processed: this.stats.processed,
+            total: this.stats.total,
+            percent: 100,
+            keysPerSecond: this.stats.keysPerSecond,
+            totalSize: this.stats.totalSize,
+          });
         }
+      } catch (error: unknown) {
+        const redisError = error as RedisError;
+        const errorMessage = redisError?.message || 'Unknown error during migration';
+        this.stats.errors.push(`Migration failed: ${errorMessage}`);
+        this.emit('error', redisError);
+        throw redisError;
       }
-
-      this.initialScanRunning = false;
-      this.emit('scanComplete');
-
-      // Keep real-time sync running after initial scan completes
-      if (this.isRunning) {
-        this.emit('progress', {
-          processed: this.stats.processed,
-          total: this.stats.total,
-          percent: 100,
-          keysPerSecond: this.stats.keysPerSecond,
-          totalSize: this.stats.totalSize,
-        });
-      }
-    } catch (error: unknown) {
-      const redisError = error as RedisError;
-      const errorMessage = redisError?.message || 'Unknown error during migration';
-      this.stats.errors.push(`Migration failed: ${errorMessage}`);
-      this.emit('error', redisError);
-      throw redisError;
+    } catch (error) {
+      await this.cleanup();
+      throw error;
     }
   }
 
@@ -425,12 +441,12 @@ export class RedisMigrator extends EventEmitter {
       }
 
       // Subscribe to all keyspace events
-      await this.subscriber.psubscribe('__keyspace@0__:*');
+      await this.subscriber?.psubscribe('__keyspace@0__:*');
       
       this.realtimeSyncEnabled = true;
       
       // Set up the event handler for real-time updates
-      this.subscriber.on('pmessage', async (_pattern, channel, message) => {
+      this.subscriber?.on('pmessage', async (_pattern, channel, message) => {
         if (!this.realtimeSyncEnabled) return;
         
         const key = channel.split(':').slice(1).join(':');
@@ -479,7 +495,7 @@ export class RedisMigrator extends EventEmitter {
     
     try {
       // Unsubscribe from keyspace notifications
-      await this.subscriber.punsubscribe('__keyspace@0__:*');
+      await this.subscriber?.punsubscribe('__keyspace@0__:*');
       
       // Clear any pending updates
       this.keyUpdateQueue.clear();
@@ -507,48 +523,15 @@ export class RedisMigrator extends EventEmitter {
   }
 
   public async cleanup(): Promise<void> {
-    this.stop();
-    if (this.subscriber) {
-      await this.subscriber.quit();
+    try {
+      if (this.subscriber) {
+        await this.subscriber.quit();
+      }
+      await this.source.quit();
+      await this.target.quit();
+    } catch (error) {
+      console.error('Error during cleanup:', error);
     }
-    await this.source.quit();
-    await this.target.quit();
-  }
-
-  private setupRealtimeSync() {
-    // Configure Redis keyspace notifications on source
-    this.source.config('SET', 'notify-keyspace-events', 'KEA');
-
-    // Subscribe to keyspace notifications
-    const subscriber = this.source.duplicate();
-    subscriber.subscribe('__keyspace@0__:*', (err, count) => {
-      if (err) {
-        this.emit('error', new Error('Failed to subscribe to keyspace events'));
-        return;
-      }
-    });
-
-    // Handle changes
-    subscriber.on('message', async (channel, message) => {
-      const key = channel.split(':')[1];
-      try {
-        // Get the new value from source
-        const value = await this.source.get(key);
-        // Replicate to target
-        if (value !== null) {
-          await this.target.set(key, value);
-        } else {
-          await this.target.del(key);
-        }
-        
-        this.emit('realtimeSync', {
-          key,
-          operation: value === null ? 'delete' : 'set',
-        });
-      } catch (error) {
-        this.emit('error', error);
-      }
-    });
   }
 
   private async updateCounts(): Promise<void> {
@@ -636,29 +619,86 @@ export class RedisMigrator extends EventEmitter {
           status: this.isRunning ? 'running' : 'completed'
         };
 
-        // Simple update with latest metrics
-        const { error: logsError } = await this.supabase
-          .from('migration_logs')
-          .update({
-            stats: {
-              totalSize: this.stats.totalSize,
-              keysProcessed: this.stats.processed,
-              totalKeys: this.stats.total,
-              currentSpeed: this.stats.keysPerSecond,
-              lastUpdated: timestamp
-            },
-            migration_metrics: metrics  // Just the latest metrics
-          })
-          .eq('migration_id', this.migrationId);
-
-        if (logsError) {
-          console.error('Error updating migration logs:', logsError);
-        }
+        // Emit metrics event instead of trying to use Supabase
+        this.emit('metrics', metrics);
 
         this.lastMetricLog = now;
       } catch (error) {
-        console.error('Error logging metrics to Supabase:', error);
+        console.error('Error logging metrics:', error);
       }
+    }
+  }
+
+  async testConnection(redis: Redis): Promise<{ success: boolean; error?: string }> {
+    try {
+      await redis.ping();
+      return { success: true };
+    } catch (error) {
+      const redisError = error as RedisError;
+      let errorMessage = 'Connection failed';
+      
+      if (redisError.code === 'ECONNREFUSED') {
+        errorMessage = 'Connection refused. Please check if Redis is running and the host/port are correct.';
+      } else if (redisError.message?.includes('WRONGPASS') || redisError.message?.includes('AUTH')) {
+        errorMessage = 'Authentication failed. Please check your password.';
+      } else if (redisError.code === 'ETIMEDOUT') {
+        errorMessage = 'Connection timed out. Please check your host address and network connectivity.';
+      } else if (redisError.code === 'ENOTFOUND') {
+        errorMessage = 'Host not found. Please check your host address.';
+      } else if (redisError.code === 'ECONNRESET') {
+        errorMessage = 'Connection reset by peer. This might be due to network issues or firewall restrictions.';
+      }
+      
+      console.error('Redis connection error:', {
+        code: redisError.code,
+        message: redisError.message,
+        error: errorMessage
+      });
+      
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  async validateConnections(): Promise<void> {
+    try {
+      // Test source connection
+      const sourceTest = await this.testConnection(this.source);
+      if (!sourceTest.success) {
+        throw new Error(`Source Redis: ${sourceTest.error}`);
+      }
+
+      // Test target connection
+      const targetTest = await this.testConnection(this.target);
+      if (!targetTest.success) {
+        throw new Error(`Target Redis: ${targetTest.error}`);
+      }
+
+      // Additional validation for same instance check
+      try {
+        const sourceInfo = await this.source.info('server');
+        const targetInfo = await this.target.info('server');
+        
+        if (sourceInfo === targetInfo) {
+          throw new Error('Source and target appear to be the same Redis instance. Please use different instances.');
+        }
+      } catch (error) {
+        // If info command fails, it's likely due to connection issues
+        throw new Error('Failed to validate Redis instances. Please check your connection settings.');
+      }
+    } catch (error) {
+      // Ensure cleanup happens on validation failure
+      await this.cleanup();
+      throw error;
+    }
+  }
+
+  private async initializeSubscriber(): Promise<void> {
+    if (!this.subscriber) {
+      this.subscriber = this.source.duplicate();
+      this.subscriber.on('error', (err) => {
+        console.error('Subscriber Redis error:', err);
+        this.emit('error', new Error(`Subscriber Redis error: ${err.message}`));
+      });
     }
   }
 }

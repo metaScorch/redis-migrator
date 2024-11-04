@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { PerformanceChart } from '@/components/performance-chart';
 import { createClient } from '@supabase/supabase-js';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import Image from 'next/image';
+import { Activity, Shield, Radio } from 'lucide-react';
 
 interface RedisConfig {
   host: string;
@@ -38,6 +47,7 @@ interface MigrationStatus {
   }>;
   totalSize: number;
   migrationId?: string;
+  startTime?: Date;
 }
 
 interface PerformanceData {
@@ -65,6 +75,25 @@ interface MigrationLog {
   error?: string;
   created_at?: Date;
 }
+
+// Add this near the feature cards section
+const featureCards = [
+  {
+    title: "Real-Time Monitoring",
+    description: "Track your migration progress in real-time with detailed metrics, speed analysis, and estimated completion time.",
+    icon: <Activity className="w-8 h-8 text-red-600 mb-2" />
+  },
+  {
+    title: "Real-Time Synchronization",
+    description: "Continuously monitor and sync changes between source and target Redis instances during migration, ensuring zero data loss.",
+    icon: <Radio className="w-8 h-8 text-red-600 mb-2" />
+  },
+  {
+    title: "Secure Transfer",
+    description: "Support for TLS encryption and password protection ensures your data remains secure during migration.",
+    icon: <Shield className="w-8 h-8 text-red-600 mb-2" />
+  }
+];
 
 export default function RedisMigration() {
   const [source, setSource] = useState<RedisConfig>({
@@ -98,6 +127,15 @@ export default function RedisMigration() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
   );
+
+  // Add new state for validation errors
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Add environment check function
+  const isDevelopment = process.env.NEXT_PUBLIC_ENV === 'development';
+
+  // Add new state for completion time
+  const [completionDuration, setCompletionDuration] = useState<number | null>(null);
 
   useEffect(() => {
     if (status.isRunning) {
@@ -135,7 +173,29 @@ export default function RedisMigration() {
     };
   }, [status.isRunning]);
 
+  useEffect(() => {
+    if (status.progress >= 100 && !completionDuration && status.startTime) {
+      setCompletionDuration(Date.now() - new Date(status.startTime).getTime());
+    }
+  }, [status.progress, status.startTime, completionDuration]);
+
   const startMigration = async () => {
+    // Reset validation error and status errors
+    setValidationError(null);
+    setStatus(prev => ({ ...prev, errors: [] }));
+
+    // Check if source and target are the same
+    if (source.host === target.host && source.port === target.port) {
+      setValidationError("Source and target cannot be the same Redis instance");
+      return;
+    }
+
+    // Check localhost restriction
+    if (!isDevelopment && (source.host === 'localhost' || target.host === 'localhost')) {
+      setValidationError("localhost is not allowed");
+      return;
+    }
+
     try {
       const migrationId = crypto.randomUUID();
       const response = await fetch('/api/migration/start', {
@@ -144,13 +204,18 @@ export default function RedisMigration() {
         body: JSON.stringify({ source, target, migrationId }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to start migration');
-      }
-
       const data = await response.json();
       
+      if (!response.ok) {
+        // Handle specific connection errors
+        if (data.error?.includes('Source Redis:') || data.error?.includes('Target Redis:')) {
+          setValidationError(data.error);
+        } else {
+          throw new Error(data.error || 'Failed to start migration');
+        }
+        return;
+      }
+
       const timestamp = new Date().toISOString();
       const { error: logsError } = await supabase
         .from('migration_logs')
@@ -181,7 +246,8 @@ export default function RedisMigration() {
         totalKeys: data.totalKeys || 0,
         totalSize: data.totalSize || 0,
         currentSpeed: 0,
-        migrationId
+        migrationId,
+        startTime: new Date()
       }));
       setPerformanceHistory([]);
     } catch (error: unknown) {
@@ -196,6 +262,11 @@ export default function RedisMigration() {
   };
 
   const stopMigration = async () => {
+    // Add confirmation dialog
+    if (!window.confirm('Are you sure you want to stop the migration? This will halt the real-time synchronization process.')) {
+      return;
+    }
+
     try {
       const response = await fetch('/api/migration/stop', { method: 'POST' });
       
@@ -256,7 +327,14 @@ export default function RedisMigration() {
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    
+    // Only include hours/minutes if they're non-zero
+    const parts = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes % 60 > 0) parts.push(`${minutes % 60}m`);
+    parts.push(`${seconds % 60}s`);
+    
+    return parts.join(' ');
   };
 
   const estimateTimeRemaining = () => {
@@ -274,231 +352,482 @@ export default function RedisMigration() {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   };
 
+  // Add this function inside the RedisMigration component, before the return statement
+  const scrollToMigration = () => {
+    document.getElementById('migration-interface')?.scrollIntoView({ 
+      behavior: 'smooth',
+      block: 'start'
+    });
+  };
+
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
-        <img src="/images/redswish-logo.png" alt="RedSwish Logo" className="h-8 w-8" />
-        <div>
-          <span className="text-red-600">Red</span>
-          <span>Zwitch</span>
-        </div>
-        - Redis Migration Utility Tool
-      </h1>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Source Configuration */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Source Redis</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div>
-                <Label>Host</Label>
-                <Input
-                  value={source.host}
-                  onChange={e => setSource(prev => ({ ...prev, host: e.target.value }))}
-                  placeholder="localhost"
-                />
-              </div>
-              <div>
-                <Label>Port</Label>
-                <Input
-                  value={source.port}
-                  onChange={e => setSource(prev => ({ ...prev, port: e.target.value }))}
-                  placeholder="6379"
-                />
-              </div>
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  value={source.password}
-                  onChange={e => setSource(prev => ({ ...prev, password: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  checked={source.tls}
-                  onCheckedChange={checked => setSource(prev => ({ ...prev, tls: checked }))}
-                />
-                <Label>TLS Enabled</Label>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Target Configuration */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Target Redis</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div>
-                <Label>Host</Label>
-                <Input
-                  value={target.host}
-                  onChange={e => setTarget(prev => ({ ...prev, host: e.target.value }))}
-                  placeholder="localhost"
-                />
-              </div>
-              <div>
-                <Label>Port</Label>
-                <Input
-                  value={target.port}
-                  onChange={e => setTarget(prev => ({ ...prev, port: e.target.value }))}
-                  placeholder="6379"
-                />
-              </div>
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  value={target.password}
-                  onChange={e => setTarget(prev => ({ ...prev, password: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  checked={target.tls}
-                  onCheckedChange={checked => setTarget(prev => ({ ...prev, tls: checked }))}
-                />
-                <Label>TLS Enabled</Label>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Update the header section */}
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2">
+          <Image 
+            src="/images/redswish-logo.png" 
+            alt="RedSwish Logo" 
+            width={32} 
+            height={32} 
+          />
+          <div>
+            <span className="text-red-600">Red</span>
+            <span>Zwitch</span>
+          </div>
+        </h1>
+        <p className="text-gray-600 max-w-3xl">
+          A powerful Redis migration tool with real-time synchronization. Migrate your Redis instances while maintaining data consistency through continuous monitoring and automatic updates of any changes during the migration process.
+        </p>
+        <Button 
+          size="lg" 
+          className="mt-4"
+          onClick={scrollToMigration}
+        >
+          Migrate Redis
+        </Button>
       </div>
 
-      {/* Migration Controls & Status */}
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Migration Status</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList>
+      {/* Update the feature cards section */}
+      <div className="grid md:grid-cols-3 gap-6 mb-12">
+        {featureCards.map((card, index) => (
+          <Card key={index}>
+            <CardHeader>
+              {card.icon}
+              <CardTitle>{card.title}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-gray-600">{card.description}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Update the features list */}
+      <div className="bg-gray-50 p-8 rounded-lg mb-12">
+        <h3 className="text-2xl font-bold mb-4">Features</h3>
+        <div className="grid md:grid-cols-2 gap-6">
+          <ul className="list-disc list-inside space-y-2 text-gray-600">
+            <li>Real-time data synchronization during migration</li>
+            <li>Zero downtime migration support</li>
+            <li>Fast and reliable migration with batch processing</li>
+            <li>Support for all Redis data types</li>
+          </ul>
+          <ul className="list-disc list-inside space-y-2 text-gray-600">
+            <li>Live change monitoring and replication</li>
+            <li>Real-time performance metrics</li>
+            <li>Secure TLS connection support</li>
+            <li>Automatic error recovery</li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Add validation error alert before the migration controls */}
+      {validationError && (
+        <Alert variant="destructive" className="mt-4">
+          <AlertDescription>{validationError}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Migration Interface */}
+      <div id="migration-interface">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Source Configuration */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Source Redis</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div>
+                  <Label>Host</Label>
+                  <Input
+                    value={source.host}
+                    onChange={e => setSource(prev => ({ ...prev, host: e.target.value }))}
+                    placeholder="Source Host"
+                  />
+                </div>
+                <div>
+                  <Label>Port</Label>
+                  <Input
+                    value={source.port}
+                    onChange={e => setSource(prev => ({ ...prev, port: e.target.value }))}
+                    placeholder="6379"
+                  />
+                </div>
+                <div>
+                  <Label>Password</Label>
+                  <Input
+                    type="password"
+                    value={source.password}
+                    onChange={e => setSource(prev => ({ ...prev, password: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    checked={source.tls}
+                    onCheckedChange={checked => setSource(prev => ({ ...prev, tls: checked }))}
+                  />
+                  <Label>TLS Enabled</Label>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Target Configuration */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Target Redis</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div>
+                  <Label>Host</Label>
+                  <Input
+                    value={target.host}
+                    onChange={e => setTarget(prev => ({ ...prev, host: e.target.value }))}
+                    placeholder="Target Host"
+                  />
+                </div>
+                <div>
+                  <Label>Port</Label>
+                  <Input
+                    value={target.port}
+                    onChange={e => setTarget(prev => ({ ...prev, port: e.target.value }))}
+                    placeholder="6379"
+                  />
+                </div>
+                <div>
+                  <Label>Password</Label>
+                  <Input
+                    type="password"
+                    value={target.password}
+                    onChange={e => setTarget(prev => ({ ...prev, password: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    checked={target.tls}
+                    onCheckedChange={checked => setTarget(prev => ({ ...prev, tls: checked }))}
+                  />
+                  <Label>TLS Enabled</Label>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Add this section for migration controls */}
+        <div className="mt-6 flex justify-center gap-4">
+          <Button
+            size="lg"
+            onClick={startMigration}
+            disabled={status.isRunning || !source.host || !target.host}
+          >
+            Start Migration
+          </Button>
+          <Button
+            size="lg"
+            variant="destructive"
+            onClick={stopMigration}
+            disabled={!status.isRunning}
+          >
+            Stop Migration
+          </Button>
+        </div>
+
+        {/* Add error alerts if any */}
+        {status.errors.length > 0 && (
+          <div className="mt-4">
+            {status.errors.map((error, index) => (
+              <Alert variant="destructive" key={index} className="mb-2">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
+
+        {/* Add progress information when migration is running */}
+        {status.isRunning && (
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div>
+                <p className="text-sm text-gray-500">Progress</p>
+                <p className="text-lg font-semibold">{Math.round(status.progress)}%</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Keys Processed</p>
+                <p className="text-lg font-semibold">{status.keysProcessed} / {status.totalKeys}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Current Speed</p>
+                <p className="text-lg font-semibold">{Math.round(status.currentSpeed)} keys/sec</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Time Remaining</p>
+                <p className="text-lg font-semibold">{estimateTimeRemaining()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Elapsed Time</p>
+                <p className="text-lg font-semibold">
+                  {status.startTime ? formatDuration(Date.now() - status.startTime.getTime()) : '-'}
+                </p>
+              </div>
+            </div>
+            {status.progress >= 100 && (
+              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg shadow-sm">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0">
+                    <svg 
+                      className="w-5 h-5 text-green-600" 
+                      fill="none" 
+                      stroke="currentColor" 
+                      viewBox="0 0 24 24"
+                    >
+                      <path 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round" 
+                        strokeWidth={2} 
+                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" 
+                      />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-green-800 font-medium mb-1">
+                      Initial migration completed successfully in {completionDuration ? 
+                        formatDuration(completionDuration) : '-'}
+                    </p>
+                    <p className="text-green-700 text-sm">
+                      Now monitoring source instance for real-time changes and synchronizing to target instance.
+                    </p>
+                    <p className="text-green-600 text-sm mt-2 font-medium">
+                      Click "Stop Migration" when you're ready to complete the process.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Add right after the progress information section, before the closing div of migration-interface */}
+        <div className="mt-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="performance">Performance</TabsTrigger>
-              <TabsTrigger value="operations">Recent Operations</TabsTrigger>
+              <TabsTrigger value="logs">Live Changes During Migration</TabsTrigger>
               <TabsTrigger value="errors">Errors</TabsTrigger>
-              <TabsTrigger value="realtime">Realtime Changes</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <div className="space-x-4">
-                    <Button
-                      onClick={startMigration}
-                      disabled={status.isRunning || !source.host || !target.host}
-                    >
-                      Start Migration
-                    </Button>
-                    <Button
-                      onClick={stopMigration}
-                      disabled={!status.isRunning}
-                      variant="destructive"
-                    >
-                      Stop Migration
-                    </Button>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <h3 className="font-semibold mb-2">Migration Details</h3>
+                      <div className="space-y-2 text-sm">
+                        <p>Total Size: {formatBytes(status.totalSize)}</p>
+                        <p>Total Keys: {status.totalKeys}</p>
+                        <p>Keys Processed: {status.keysProcessed}</p>
+                        <p>Average Speed: {Math.round(status.currentSpeed)} keys/sec</p>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold mb-2">Connection Details</h3>
+                      <div className="space-y-2 text-sm">
+                        <p>Source: {source.host}:{source.port}</p>
+                        <p>Target: {target.host}:{target.port}</p>
+                        <p>Status: {status.isRunning ? 
+                          <span className="text-green-600">Running</span> : 
+                          <span className="text-gray-600">Stopped</span>
+                        }</p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-sm text-gray-500">
-                    {status.isRunning ? 'Migration in progress' : 'Migration stopped'}
-                  </div>
-                </div>
-
-                {/* Progress Bar */}
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
-                  <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
-                    style={{ width: `${status.progress}%` }}
-                  ></div>
-                </div>
-
-                {/* Statistics */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <Label>Progress</Label>
-                    <div className="text-xl font-bold">{status.progress.toFixed(1)}%</div>
-                  </div>
-                  <div>
-                    <Label>Keys Processed</Label>
-                    <div className="text-xl font-bold">{status.keysProcessed.toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <Label>Total Keys</Label>
-                    <div className="text-xl font-bold">{status.totalKeys.toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <Label>Current Speed</Label>
-                    <div className="text-xl font-bold">{status.currentSpeed.toLocaleString()} keys/sec</div>
-                  </div>
-                  <div>
-                    <Label>Estimated Time Remaining</Label>
-                    <div className="text-xl font-bold">{estimateTimeRemaining()}</div>
-                  </div>
-                  <div>
-                    <Label>Total Size</Label>
-                    <div className="text-xl font-bold">{formatBytes(status.totalSize)}</div>
-                  </div>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="performance">
-              <PerformanceChart data={performanceHistory} />
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="h-[300px]">
+                    {performanceHistory.length > 0 ? (
+                      <LineChart
+                        width={800}
+                        height={300}
+                        data={performanceHistory}
+                        margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                          dataKey="timestamp" 
+                          tickFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
+                        />
+                        <YAxis />
+                        <Tooltip 
+                          labelFormatter={(timestamp) => new Date(timestamp).toLocaleTimeString()}
+                          formatter={(value) => [`${value} keys/sec`, 'Speed']}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="speed" 
+                          stroke="#8884d8" 
+                          name="Migration Speed"
+                        />
+                      </LineChart>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-gray-500">
+                        No performance data available
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
-            <TabsContent value="operations">
-              <div className="space-y-2">
-                {status.recentOperations?.map((op, index) => (
-                  <div key={index} className="flex justify-between items-center text-sm">
-                    <span>{op.key}</span>
-                    <span className="text-gray-500">{op.operation}</span>
-                    <span className="text-gray-500">
-                      {new Date(op.timestamp).toLocaleTimeString()}
-                    </span>
+            <TabsContent value="logs">
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {status.recentOperations?.length ? (
+                      status.recentOperations.map((op, index) => (
+                        <div key={index} className="text-sm border-b border-gray-100 pb-1">
+                          <span className="text-gray-500">
+                            {new Date(op.timestamp).toLocaleTimeString()}
+                          </span>
+                          {' - '}
+                          <span className="font-medium">{op.operation}</span>
+                          {' - '}
+                          <span className="font-mono text-xs">{op.key}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center text-gray-500">No recent operations</div>
+                    )}
                   </div>
-                ))}
-              </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="errors">
-              {status.errors.length > 0 ? (
-                <Alert variant="destructive">
-                  <AlertDescription>
-                    <ul className="list-disc pl-4">
-                      {status.errors.map((error, index) => (
-                        <li key={index}>{error}</li>
-                      ))}
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              ) : (
-                <div className="text-gray-500">No errors reported</div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="realtime">
-              <div className="space-y-2">
-                {status.recentChanges?.map((change, index) => (
-                  <div key={index} className="flex justify-between items-center text-sm">
-                    <span>{change.key}</span>
-                    <span className="text-gray-500">{change.operation}</span>
-                    <span className="text-gray-500">
-                      {new Date(change.timestamp).toLocaleTimeString()}
-                    </span>
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {status.errors.length > 0 ? (
+                      status.errors.map((error, index) => (
+                        <div 
+                          key={index} 
+                          className="p-3 bg-red-50 border border-red-200 rounded-md mb-2"
+                        >
+                          <div className="flex items-start">
+                            <div className="text-red-600 mr-2">
+                              <svg 
+                                className="w-5 h-5" 
+                                fill="none" 
+                                stroke="currentColor" 
+                                viewBox="0 0 24 24"
+                              >
+                                <path 
+                                  strokeLinecap="round" 
+                                  strokeLinejoin="round" 
+                                  strokeWidth={2} 
+                                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+                                />
+                              </svg>
+                            </div>
+                            <div>
+                              <p className="text-sm text-red-700">{error}</p>
+                              <p className="text-xs text-red-500 mt-1">
+                                {new Date().toLocaleTimeString()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center text-gray-500 py-8">
+                        No errors recorded during migration
+                      </div>
+                    )}
                   </div>
-                ))}
-              </div>
+                </CardContent>
+              </Card>
             </TabsContent>
           </Tabs>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      {/* FAQ Section */}
+      <div className="mt-12 mb-8">
+        <h2 className="text-2xl font-bold mb-6 text-left">Frequently Asked Questions</h2>
+        <Accordion type="single" collapsible className="w-full text-left">
+          <AccordionItem value="item-1">
+            <AccordionTrigger className="text-left">How do I start a migration?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                1. Enter your source Redis instance details (host, port, password if required)<br />
+                2. Enter your target Redis instance details<br />
+                3. Enable TLS if your Redis instances require secure connections<br />
+                4. Click the &quot;Start Migration&quot; button to begin the process
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="item-2">
+            <AccordionTrigger className="text-left">Can I migrate between different Redis versions?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                Yes, RedZwitch supports migration between different Redis versions. However, it&apos;s recommended to migrate to the same or newer version to ensure compatibility with all data types and commands.
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="item-3">
+            <AccordionTrigger className="text-left">What happens if the migration is interrupted?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                If the migration is interrupted, you can safely restart it. RedZwitch keeps track of migrated keys and will resume from where it left off. Any changes made to the source database during the interruption will be synchronized when the migration resumes.
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="item-4">
+            <AccordionTrigger className="text-left">Is my data safe during migration?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                Yes, RedZwitch ensures data safety through:<br />
+                - Read-only operations on the source database<br />
+                - TLS encryption support for secure data transfer<br />
+                - Real-time verification of migrated data<br />
+                - Automatic error handling and recovery
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="item-5">
+            <AccordionTrigger className="text-left">Can I use localhost Redis instances?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                No, localhost connections aren&apos;t allowed as the migration tool is designed to run on the web. However if you must use localhost, you can use services like ngrok or cloudflare tunnel to expose your localhost Redis instance to the web.
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="item-6">
+            <AccordionTrigger className="text-left">How does RedZwitch handle data privacy and security?</AccordionTrigger>
+            <AccordionContent>
+              <p className="text-gray-600 text-left">
+                RedZwitch takes data protection seriously. We operate strictly as a transit service and do not store or log any of your Redis data. The migration process happens in real-time, with data flowing directly between your source and target Redis instances. We never persist, cache, or store your data on our servers. The only information we maintain is basic migration statistics (like progress and speed) to support the migration process, but this never includes your actual Redis data.
+              </p>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </div>
     </div>
   );
 }
+
