@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/accordion";
 import Image from 'next/image';
 import { Activity, Shield, Radio } from 'lucide-react';
+import { Slider } from "@/components/ui/slider";
 
 interface RedisConfig {
   host: string;
@@ -95,6 +96,48 @@ const featureCards = [
   }
 ];
 
+// Add these interfaces after your existing interfaces
+interface PricingTier {
+  name: string;
+  maxKeys: number;
+  costPerKey: number;
+  flatCost?: number;
+}
+
+// Add this constant after your existing constants
+const pricingTiers: PricingTier[] = [
+  { name: 'Free Plan', maxKeys: 5000, costPerKey: 0 },
+  { name: 'Starter Plan', maxKeys: 10000, costPerKey: 0.005 },
+  { name: 'Basic Plan', maxKeys: 100000, costPerKey: 0.002 },
+  { name: 'Growth Plan', maxKeys: 500000, costPerKey: 0.0015 },
+  { name: 'Pro Plan', maxKeys: 1000000, costPerKey: 0.001 },
+  { name: 'Enterprise Plan', maxKeys: 10000000, costPerKey: 0.0001, flatCost: 1000 },
+];
+
+// Add this near the top of your component, after the imports
+const navLinks = [
+  { name: 'Features', href: '#features' },
+  { name: 'Migration', href: '#migration-interface' },
+  { name: 'Pricing', href: '#pricing' },
+  { name: 'FAQ', href: '#faq' }
+];
+
+// Add this helper function to get the applicable tier and cost
+const getApplicableTier = (keyCount: number) => {
+  if (keyCount === 0) return { tier: pricingTiers[0], cost: 0 };
+  
+  const applicableTier = pricingTiers
+    .filter(tier => keyCount <= tier.maxKeys)
+    .reduce((best, current) => {
+      const bestCost = best.flatCost || (best.costPerKey * keyCount);
+      const currentCost = current.flatCost || (current.costPerKey * keyCount);
+      return currentCost < bestCost ? current : best;
+    });
+
+  const cost = applicableTier.flatCost || (applicableTier.costPerKey * keyCount);
+  return { tier: applicableTier, cost };
+};
+
 export default function RedisMigration() {
   const [source, setSource] = useState<RedisConfig>({
     host: '',
@@ -136,6 +179,26 @@ export default function RedisMigration() {
 
   // Add new state for completion time
   const [completionDuration, setCompletionDuration] = useState<number | null>(null);
+
+  // Add these state variables inside your RedisMigration component
+  const [selectedTier, setSelectedTier] = useState<string>('Free Plan');
+  const [customKeyCount, setCustomKeyCount] = useState<string>("10000");
+
+  // Update the calculateCost function to automatically determine the best tier
+  const calculateCost = (keyCount: number) => {
+    if (keyCount === 0) return 0;
+    
+    // Find the most cost-effective tier for the given key count
+    const applicableTier = pricingTiers
+      .filter(tier => keyCount <= tier.maxKeys)
+      .reduce((best, current) => {
+        const bestCost = best.flatCost || (best.costPerKey * keyCount);
+        const currentCost = current.flatCost || (current.costPerKey * keyCount);
+        return currentCost < bestCost ? current : best;
+      });
+
+    return applicableTier.flatCost || (applicableTier.costPerKey * keyCount);
+  };
 
   useEffect(() => {
     if (status.isRunning) {
@@ -362,34 +425,54 @@ export default function RedisMigration() {
 
   return (
     <div className="container mx-auto p-4">
-      {/* Update the header section */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2">
-          <Image 
-            src="/images/redswish-logo.png" 
-            alt="RedSwish Logo" 
-            width={32} 
-            height={32} 
-          />
-          <div>
-            <span className="text-red-600">Red</span>
-            <span>Zwitch</span>
+      {/* Add the header navigation */}
+      <header className="sticky top-0 z-50 w-full border-b bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
+        <div className="container flex h-14 items-center">
+          <div className="flex items-center gap-2 mr-8">
+            <Image 
+              src="/images/redswish-logo.png" 
+              alt="RedSwish Logo" 
+              width={32} 
+              height={32} 
+            />
+            <div>
+              <span className="text-red-600 font-bold">Red</span>
+              <span className="font-bold">Zwitch</span>
+            </div>
           </div>
+          <nav className="flex items-center space-x-6 text-sm font-medium">
+            {navLinks.map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                className="transition-colors hover:text-red-600"
+              >
+                {link.name}
+              </a>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      {/* Add this right after the header */}
+      <div className="py-16 text-center">
+        <h1 className="text-4xl font-bold mb-4">
+          A powerful Redis migration tool with real-time synchronization
         </h1>
-        <p className="text-gray-600 max-w-3xl">
-          A powerful Redis migration tool with real-time synchronization. Migrate your Redis instances while maintaining data consistency through continuous monitoring and automatic updates of any changes during the migration process.
+        <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
+          Migrate your Redis instances while maintaining data consistency through continuous monitoring 
+          and automatic updates of any changes during the migration process.
         </p>
         <Button 
           size="lg" 
-          className="mt-4"
-          onClick={scrollToMigration}
+          onClick={() => document.getElementById('migration-interface')?.scrollIntoView({ behavior: 'smooth' })}
         >
           Migrate Redis
         </Button>
       </div>
 
       {/* Update the feature cards section */}
-      <div className="grid md:grid-cols-3 gap-6 mb-12">
+      <div id="features" className="grid md:grid-cols-3 gap-6 mb-12">
         {featureCards.map((card, index) => (
           <Card key={index}>
             <CardHeader>
@@ -402,32 +485,6 @@ export default function RedisMigration() {
           </Card>
         ))}
       </div>
-
-      {/* Update the features list */}
-      <div className="bg-gray-50 p-8 rounded-lg mb-12">
-        <h3 className="text-2xl font-bold mb-4">Features</h3>
-        <div className="grid md:grid-cols-2 gap-6">
-          <ul className="list-disc list-inside space-y-2 text-gray-600">
-            <li>Real-time data synchronization during migration</li>
-            <li>Zero downtime migration support</li>
-            <li>Fast and reliable migration with batch processing</li>
-            <li>Support for all Redis data types</li>
-          </ul>
-          <ul className="list-disc list-inside space-y-2 text-gray-600">
-            <li>Live change monitoring and replication</li>
-            <li>Real-time performance metrics</li>
-            <li>Secure TLS connection support</li>
-            <li>Automatic error recovery</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Add validation error alert before the migration controls */}
-      {validationError && (
-        <Alert variant="destructive" className="mt-4">
-          <AlertDescription>{validationError}</AlertDescription>
-        </Alert>
-      )}
 
       {/* Migration Interface */}
       <div id="migration-interface">
@@ -761,8 +818,125 @@ export default function RedisMigration() {
         </div>
       </div>
 
+      {/* Pricing Section */}
+      <div id="pricing" className="mt-12 mb-8">
+        <h2 className="text-2xl font-bold mb-6">Simple, Transparent Pricing</h2>
+        
+        <div className="overflow-x-auto rounded-xl shadow-lg">
+          <table className="w-full border-collapse bg-white">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Plan Type</th>
+                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Keys Processed</th>
+                <th className="px-6 py-4 text-left text-sm font-semibold text-gray-900">Cost per Key</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {pricingTiers.map((tier) => (
+                <tr 
+                  key={tier.name} 
+                  className="hover:bg-gray-50 transition-colors"
+                >
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900">{tier.name}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    Up to {tier.maxKeys.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {tier.costPerKey ? `$${tier.costPerKey.toFixed(4)}` : 'Free'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Update the unlimited plan section with reduced height */}
+        <div className="text-center my-12">
+          <div className="text-xl font-bold text-gray-400 mb-8">— OR —</div>
+          <div className="mt-6 p-6 border-2 border-red-600 rounded-2xl shadow-lg w-full">
+            <div className="flex justify-center items-center gap-2 mb-2">
+              <h3 className="text-2xl font-bold text-red-600">Unlimited Plan</h3>
+              <span className="px-2 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+                Popular
+              </span>
+            </div>
+            <p className="text-5xl font-bold text-gray-900 mb-2">
+              $799
+              <span className="text-lg text-gray-600 ml-2">/year</span>
+            </p>
+            <p className="text-gray-600 text-lg">Unlimited Keys & Migrations</p>
+            <Button className="mt-3" size="lg">Get Started</Button>
+          </div>
+        </div>
+
+        <Card className="mt-12 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-xl">Cost Calculator</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div>
+              <div className="flex justify-between mb-2">
+                <Label>Number of Keys to Migrate</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    value={customKeyCount}
+                    onChange={(e) => {
+                      const value = Math.min(Math.max(0, parseInt(e.target.value) || 0), 10000000);
+                      setCustomKeyCount(value.toString());
+                    }}
+                    className="w-32 text-right"
+                  />
+                  <span className="text-sm text-gray-500">keys</span>
+                </div>
+              </div>
+              <Slider
+                defaultValue={[10000]}
+                max={10000000}
+                step={1000}
+                value={[parseInt(customKeyCount)]}
+                onValueChange={(value) => setCustomKeyCount(value[0].toString())}
+                className="w-full"
+              />
+              <div className="flex justify-between mt-1">
+                <span className="text-sm text-gray-500">0</span>
+                <span className="text-sm text-gray-500">10M</span>
+              </div>
+            </div>
+            
+            <div className="p-6 bg-gray-50 rounded-xl space-y-4">
+              <div className="flex justify-between items-baseline">
+                <span className="text-gray-600">Recommended Plan:</span>
+                <span className="text-lg font-semibold text-gray-900">
+                  {getApplicableTier(parseInt(customKeyCount) || 0).tier.name}
+                </span>
+              </div>
+              <div className="flex justify-between items-baseline">
+                <span className="text-gray-600">Cost per Key:</span>
+                <span className="text-lg font-semibold text-gray-900">
+                  ${getApplicableTier(parseInt(customKeyCount) || 0).tier.costPerKey.toFixed(4)}
+                </span>
+              </div>
+              <div className="pt-4 border-t">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-gray-600">Total Estimated Cost:</span>
+                  <span className="text-3xl font-bold text-gray-900">
+                    ${getApplicableTier(parseInt(customKeyCount) || 0).cost.toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 mt-2">
+                  Based on the most cost-effective plan for your needs
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* FAQ Section */}
-      <div className="mt-12 mb-8">
+      <div id="faq" className="mt-12 mb-8">
         <h2 className="text-2xl font-bold mb-6 text-left">Frequently Asked Questions</h2>
         <Accordion type="single" collapsible className="w-full text-left">
           <AccordionItem value="item-1">
