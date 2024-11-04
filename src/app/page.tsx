@@ -18,6 +18,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import Image from 'next/image';
+import { Activity, Shield, Radio } from 'lucide-react';
 
 interface RedisConfig {
   host: string;
@@ -46,6 +47,7 @@ interface MigrationStatus {
   }>;
   totalSize: number;
   migrationId?: string;
+  startTime?: Date;
 }
 
 interface PerformanceData {
@@ -78,15 +80,18 @@ interface MigrationLog {
 const featureCards = [
   {
     title: "Real-Time Monitoring",
-    description: "Track your migration progress in real-time with detailed metrics, speed analysis, and estimated completion time."
+    description: "Track your migration progress in real-time with detailed metrics, speed analysis, and estimated completion time.",
+    icon: <Activity className="w-8 h-8 text-red-600 mb-2" />
   },
   {
     title: "Real-Time Synchronization",
-    description: "Continuously monitor and sync changes between source and target Redis instances during migration, ensuring zero data loss."
+    description: "Continuously monitor and sync changes between source and target Redis instances during migration, ensuring zero data loss.",
+    icon: <Radio className="w-8 h-8 text-red-600 mb-2" />
   },
   {
     title: "Secure Transfer",
-    description: "Support for TLS encryption and password protection ensures your data remains secure during migration."
+    description: "Support for TLS encryption and password protection ensures your data remains secure during migration.",
+    icon: <Shield className="w-8 h-8 text-red-600 mb-2" />
   }
 ];
 
@@ -129,6 +134,9 @@ export default function RedisMigration() {
   // Add environment check function
   const isDevelopment = process.env.NEXT_PUBLIC_ENV === 'development';
 
+  // Add new state for completion time
+  const [completionDuration, setCompletionDuration] = useState<number | null>(null);
+
   useEffect(() => {
     if (status.isRunning) {
       const eventSource = new EventSource('/api/migration/events');
@@ -164,6 +172,12 @@ export default function RedisMigration() {
       }
     };
   }, [status.isRunning]);
+
+  useEffect(() => {
+    if (status.progress >= 100 && !completionDuration && status.startTime) {
+      setCompletionDuration(Date.now() - new Date(status.startTime).getTime());
+    }
+  }, [status.progress, status.startTime, completionDuration]);
 
   const startMigration = async () => {
     // Reset validation error
@@ -226,7 +240,8 @@ export default function RedisMigration() {
         totalKeys: data.totalKeys || 0,
         totalSize: data.totalSize || 0,
         currentSpeed: 0,
-        migrationId
+        migrationId,
+        startTime: new Date()
       }));
       setPerformanceHistory([]);
     } catch (error: unknown) {
@@ -301,7 +316,14 @@ export default function RedisMigration() {
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    
+    // Only include hours/minutes if they're non-zero
+    const parts = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes % 60 > 0) parts.push(`${minutes % 60}m`);
+    parts.push(`${seconds % 60}s`);
+    
+    return parts.join(' ');
   };
 
   const estimateTimeRemaining = () => {
@@ -317,6 +339,14 @@ export default function RedisMigration() {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
+  // Add this function inside the RedisMigration component, before the return statement
+  const scrollToMigration = () => {
+    document.getElementById('migration-interface')?.scrollIntoView({ 
+      behavior: 'smooth',
+      block: 'start'
+    });
   };
 
   return (
@@ -338,6 +368,13 @@ export default function RedisMigration() {
         <p className="text-gray-600 max-w-3xl">
           A powerful Redis migration tool with real-time synchronization. Migrate your Redis instances while maintaining data consistency through continuous monitoring and automatic updates of any changes during the migration process.
         </p>
+        <Button 
+          size="lg" 
+          className="mt-4"
+          onClick={scrollToMigration}
+        >
+          Migrate Redis
+        </Button>
       </div>
 
       {/* Update the feature cards section */}
@@ -345,6 +382,7 @@ export default function RedisMigration() {
         {featureCards.map((card, index) => (
           <Card key={index}>
             <CardHeader>
+              {card.icon}
               <CardTitle>{card.title}</CardTitle>
             </CardHeader>
             <CardContent>
@@ -503,7 +541,7 @@ export default function RedisMigration() {
         {/* Add progress information when migration is running */}
         {status.isRunning && (
           <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
                 <p className="text-sm text-gray-500">Progress</p>
                 <p className="text-lg font-semibold">{Math.round(status.progress)}%</p>
@@ -520,7 +558,46 @@ export default function RedisMigration() {
                 <p className="text-sm text-gray-500">Time Remaining</p>
                 <p className="text-lg font-semibold">{estimateTimeRemaining()}</p>
               </div>
+              <div>
+                <p className="text-sm text-gray-500">Elapsed Time</p>
+                <p className="text-lg font-semibold">
+                  {status.startTime ? formatDuration(Date.now() - status.startTime.getTime()) : '-'}
+                </p>
+              </div>
             </div>
+            {status.progress >= 100 && (
+              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg shadow-sm">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0">
+                    <svg 
+                      className="w-5 h-5 text-green-600" 
+                      fill="none" 
+                      stroke="currentColor" 
+                      viewBox="0 0 24 24"
+                    >
+                      <path 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round" 
+                        strokeWidth={2} 
+                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" 
+                      />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-green-800 font-medium mb-1">
+                      Initial migration completed successfully in {completionDuration ? 
+                        formatDuration(completionDuration) : '-'}
+                    </p>
+                    <p className="text-green-700 text-sm">
+                      Now monitoring source instance for real-time changes and synchronizing to target instance.
+                    </p>
+                    <p className="text-green-600 text-sm mt-2 font-medium">
+                      Click "Stop Migration" when you're ready to complete the process.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -675,12 +752,12 @@ export default function RedisMigration() {
 
       {/* FAQ Section */}
       <div className="mt-12 mb-8">
-        <h2 className="text-2xl font-bold mb-6">Frequently Asked Questions</h2>
-        <Accordion type="single" collapsible className="w-full">
+        <h2 className="text-2xl font-bold mb-6 text-left">Frequently Asked Questions</h2>
+        <Accordion type="single" collapsible className="w-full text-left">
           <AccordionItem value="item-1">
-            <AccordionTrigger>How do I start a migration?</AccordionTrigger>
+            <AccordionTrigger className="text-left">How do I start a migration?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-left">
                 1. Enter your source Redis instance details (host, port, password if required)<br />
                 2. Enter your target Redis instance details<br />
                 3. Enable TLS if your Redis instances require secure connections<br />
@@ -690,27 +767,27 @@ export default function RedisMigration() {
           </AccordionItem>
 
           <AccordionItem value="item-2">
-            <AccordionTrigger>Can I migrate between different Redis versions?</AccordionTrigger>
+            <AccordionTrigger className="text-left">Can I migrate between different Redis versions?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-left">
                 Yes, RedZwitch supports migration between different Redis versions. However, it&apos;s recommended to migrate to the same or newer version to ensure compatibility with all data types and commands.
               </p>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="item-3">
-            <AccordionTrigger>What happens if the migration is interrupted?</AccordionTrigger>
+            <AccordionTrigger className="text-left">What happens if the migration is interrupted?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-left">
                 If the migration is interrupted, you can safely restart it. RedZwitch keeps track of migrated keys and will resume from where it left off. Any changes made to the source database during the interruption will be synchronized when the migration resumes.
               </p>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="item-4">
-            <AccordionTrigger>Is my data safe during migration?</AccordionTrigger>
+            <AccordionTrigger className="text-left">Is my data safe during migration?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-left">
                 Yes, RedZwitch ensures data safety through:<br />
                 - Read-only operations on the source database<br />
                 - TLS encryption support for secure data transfer<br />
@@ -721,18 +798,18 @@ export default function RedisMigration() {
           </AccordionItem>
 
           <AccordionItem value="item-5">
-            <AccordionTrigger>Can I use localhost Redis instances?</AccordionTrigger>
+            <AccordionTrigger className="text-left">Can I use localhost Redis instances?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
-                No, localhost connections aren&apos;t allowed as the migration tool is designed to run on the web.
+              <p className="text-gray-600 text-left">
+                No, localhost connections aren&apos;t allowed as the migration tool is designed to run on the web. However if you must use localhost, you can use services like ngrok or cloudflare tunnel to expose your localhost Redis instance to the web.
               </p>
             </AccordionContent>
           </AccordionItem>
 
           <AccordionItem value="item-6">
-            <AccordionTrigger>How does RedZwitch handle data privacy and security?</AccordionTrigger>
+            <AccordionTrigger className="text-left">How does RedZwitch handle data privacy and security?</AccordionTrigger>
             <AccordionContent>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-left">
                 RedZwitch takes data protection seriously. We operate strictly as a transit service and do not store or log any of your Redis data. The migration process happens in real-time, with data flowing directly between your source and target Redis instances. We never persist, cache, or store your data on our servers. The only information we maintain is basic migration statistics (like progress and speed) to support the migration process, but this never includes your actual Redis data.
               </p>
             </AccordionContent>
