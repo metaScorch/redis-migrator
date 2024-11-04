@@ -180,8 +180,9 @@ export default function RedisMigration() {
   }, [status.progress, status.startTime, completionDuration]);
 
   const startMigration = async () => {
-    // Reset validation error
+    // Reset validation error and status errors
     setValidationError(null);
+    setStatus(prev => ({ ...prev, errors: [] }));
 
     // Check if source and target are the same
     if (source.host === target.host && source.port === target.port) {
@@ -203,13 +204,18 @@ export default function RedisMigration() {
         body: JSON.stringify({ source, target, migrationId }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to start migration');
-      }
-
       const data = await response.json();
       
+      if (!response.ok) {
+        // Handle specific connection errors
+        if (data.error?.includes('Source Redis:') || data.error?.includes('Target Redis:')) {
+          setValidationError(data.error);
+        } else {
+          throw new Error(data.error || 'Failed to start migration');
+        }
+        return;
+      }
+
       const timestamp = new Date().toISOString();
       const { error: logsError } = await supabase
         .from('migration_logs')
@@ -256,6 +262,11 @@ export default function RedisMigration() {
   };
 
   const stopMigration = async () => {
+    // Add confirmation dialog
+    if (!window.confirm('Are you sure you want to stop the migration? This will halt the real-time synchronization process.')) {
+      return;
+    }
+
     try {
       const response = await fetch('/api/migration/stop', { method: 'POST' });
       

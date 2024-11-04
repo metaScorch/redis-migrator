@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Create migrator instance
       const migratorInstance = new RedisMigrator(
         {
           host: source.host || 'localhost',
@@ -48,6 +49,19 @@ export async function POST(request: NextRequest) {
         { enableRealtimeSync: true }
       );
 
+      // Validate connections before proceeding
+      try {
+        await migratorInstance.validateConnections();
+      } catch (error) {
+        // Clean up the instance
+        await migratorInstance.cleanup();
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : 'Connection validation failed' },
+          { status: 400 }
+        );
+      }
+
+      // Only set up event handlers and start migration if validation passes
       migratorInstance.on('progress', (stats) => {
         migrationStatus.progress = stats.percent;
         migrationStatus.keysProcessed = stats.processed;
@@ -57,17 +71,6 @@ export async function POST(request: NextRequest) {
         migrationStatus.lastUpdate = new Date();
       });
 
-      migratorInstance.on('keyProcessed', (data) => {
-        migrationStatus.recentOperations = [
-          {
-            key: data.key,
-            operation: data.operation,
-            timestamp: new Date(),
-          },
-          ...(migrationStatus.recentOperations || []).slice(0, 99)
-        ];
-      });
-
       setMigrator(migratorInstance);
       migrationStatus.isRunning = true;
       
@@ -75,6 +78,7 @@ export async function POST(request: NextRequest) {
       migratorInstance.start().catch((error) => {
         console.error('Migration error:', error);
         migrationStatus.errors.push(error.message);
+        migrationStatus.isRunning = false;
       });
       
       return NextResponse.json({ message: 'Migration started' });
