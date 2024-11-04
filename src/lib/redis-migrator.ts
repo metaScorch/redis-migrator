@@ -106,6 +106,10 @@ export class RedisMigrator extends EventEmitter {
 
   private async setupKeyspaceNotifications() {
     try {
+      if (!this.subscriber) {
+        throw new Error('Subscriber not initialized');
+      }
+      
       await this.source.config('SET', 'notify-keyspace-events', 'AKE');
       await this.subscriber.psubscribe('__keyspace@0__:*');
       
@@ -143,14 +147,14 @@ export class RedisMigrator extends EventEmitter {
                 break;
             }
           }
-        } catch (error) {
-          console.error(`Error processing operation ${operation} for key ${key}:`, error);
-          this.emit('error', error);
+        } catch (err) {
+          console.error(`Error processing operation ${operation} for key ${key}:`, err);
+          this.emit('error', err);
         }
       });
 
-    } catch (error) {
-      const redisError = error as RedisError;
+    } catch (err) {
+      const redisError = err as RedisError;
       const errorMessage = redisError?.message || 'Unknown error during keyspace notification setup';
       this.stats.errors.push(`Failed to setup keyspace notifications: ${errorMessage}`);
       this.emit('error', redisError);
@@ -437,12 +441,12 @@ export class RedisMigrator extends EventEmitter {
       }
 
       // Subscribe to all keyspace events
-      await this.subscriber.psubscribe('__keyspace@0__:*');
+      await this.subscriber?.psubscribe('__keyspace@0__:*');
       
       this.realtimeSyncEnabled = true;
       
       // Set up the event handler for real-time updates
-      this.subscriber.on('pmessage', async (_pattern, channel, message) => {
+      this.subscriber?.on('pmessage', async (_pattern, channel, message) => {
         if (!this.realtimeSyncEnabled) return;
         
         const key = channel.split(':').slice(1).join(':');
@@ -491,7 +495,7 @@ export class RedisMigrator extends EventEmitter {
     
     try {
       // Unsubscribe from keyspace notifications
-      await this.subscriber.punsubscribe('__keyspace@0__:*');
+      await this.subscriber?.punsubscribe('__keyspace@0__:*');
       
       // Clear any pending updates
       this.keyUpdateQueue.clear();
@@ -528,37 +532,6 @@ export class RedisMigrator extends EventEmitter {
     } catch (error) {
       console.error('Error during cleanup:', error);
     }
-  }
-
-  private setupRealtimeSync() {
-    this.source.config('SET', 'notify-keyspace-events', 'KEA');
-
-    const subscriber = this.source.duplicate();
-    subscriber.subscribe('__keyspace@0__:*', (err) => {
-      if (err) {
-        this.emit('error', new Error('Failed to subscribe to keyspace events'));
-        return;
-      }
-    });
-
-    subscriber.on('message', async (channel) => {
-      const key = channel.split(':')[1];
-      try {
-        const value = await this.source.get(key);
-        if (value !== null) {
-          await this.target.set(key, value);
-        } else {
-          await this.target.del(key);
-        }
-        
-        this.emit('realtimeSync', {
-          key,
-          operation: value === null ? 'delete' : 'set',
-        });
-      } catch (error) {
-        this.emit('error', error);
-      }
-    });
   }
 
   private async updateCounts(): Promise<void> {
