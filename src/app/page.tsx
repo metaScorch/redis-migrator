@@ -399,7 +399,7 @@ export default function RedisMigration() {
           <ul className="list-disc list-inside space-y-2 text-gray-600">
             <li>Real-time data synchronization during migration</li>
             <li>Zero downtime migration support</li>
-            <li>Performance optimization with batch processing</li>
+            <li>Fast and reliable migration with batch processing</li>
             <li>Support for all Redis data types</li>
           </ul>
           <ul className="list-disc list-inside space-y-2 text-gray-600">
