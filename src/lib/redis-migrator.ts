@@ -1,6 +1,5 @@
 import Redis from 'ioredis';
 import { EventEmitter } from 'events';
-import { createClient } from '@supabase/supabase-js';
 
 interface RedisConfig {
   host: string;
@@ -42,65 +41,53 @@ interface MigrationMetrics {
 }
 
 export class RedisMigrator extends EventEmitter {
-  public source: Redis;
+  private source: Redis;
   private target: Redis;
-  private subscriber: Redis;
-  private stats: MigrationStats;
-  private initialScanRunning: boolean = false;
-  private realtimeSyncEnabled: boolean = false;
-  private scanCursor: string = '0';
-  private batchSize: number = 1000;
-  private keyUpdateQueue: Set<string> = new Set();
-  private processingQueue: boolean = false;
-  private isRunning: boolean = false;
-  private supabase;
+  private options: MigratorOptions;
   private migrationId: string;
-  private lastMetricLog: number = 0;
-  private readonly METRIC_LOG_INTERVAL = 5000; // Log every 5 seconds
+  private stats: MigrationStats = {
+    processed: 0,
+    total: 0,
+    errors: [],
+    startTime: Date.now(),
+    keysPerSecond: 0,
+    totalSize: 0
+  };
+  private isRunning = false;
+  private initialScanRunning = false;
+  private realtimeSyncEnabled = false;
+  private subscriber: Redis;
+  private keyUpdateQueue = new Set<string>();
+  private processingQueue = false;
+  private scanCursor = '0';
+  private lastMetricLog = 0;
+  private readonly METRIC_LOG_INTERVAL = 5000;
 
   constructor(
     sourceConfig: RedisConfig,
     targetConfig: RedisConfig,
     migrationId: string,
-    options: MigratorOptions = {}
+    options: MigratorOptions = { enableRealtimeSync: false }
   ) {
     super();
-    this.migrationId = migrationId;
-    this.supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
-    );
+
     this.source = new Redis({
       host: sourceConfig.host,
       port: sourceConfig.port,
       password: sourceConfig.password,
-      tls: sourceConfig.tls ? {} : undefined,
+      tls: sourceConfig.tls ? {} : undefined
     });
-
+    
     this.target = new Redis({
       host: targetConfig.host,
       port: targetConfig.port,
       password: targetConfig.password,
-      tls: targetConfig.tls ? {} : undefined,
+      tls: targetConfig.tls ? {} : undefined
     });
 
     this.subscriber = this.source.duplicate();
-
-    this.stats = {
-      processed: 0,
-      total: 0,
-      errors: [],
-      startTime: 0,
-      keysPerSecond: 0,
-      totalSize: 0,
-    };
-
-    this.setupKeyspaceNotifications();
-
-    if (options.enableRealtimeSync) {
-      this.setupRealtimeSync();
-      this.startPeriodicCountUpdate();
-    }
+    this.migrationId = migrationId;
+    this.options = options;
   }
 
   private async setupKeyspaceNotifications() {
@@ -516,25 +503,20 @@ export class RedisMigrator extends EventEmitter {
   }
 
   private setupRealtimeSync() {
-    // Configure Redis keyspace notifications on source
     this.source.config('SET', 'notify-keyspace-events', 'KEA');
 
-    // Subscribe to keyspace notifications
     const subscriber = this.source.duplicate();
-    subscriber.subscribe('__keyspace@0__:*', (err, count) => {
+    subscriber.subscribe('__keyspace@0__:*', (err) => {
       if (err) {
         this.emit('error', new Error('Failed to subscribe to keyspace events'));
         return;
       }
     });
 
-    // Handle changes
-    subscriber.on('message', async (channel, message) => {
+    subscriber.on('message', async (channel, _message) => {
       const key = channel.split(':')[1];
       try {
-        // Get the new value from source
         const value = await this.source.get(key);
-        // Replicate to target
         if (value !== null) {
           await this.target.set(key, value);
         } else {

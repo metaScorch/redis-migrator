@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { RedisMigrator } from '../../../../lib/redis-migrator';
 import { migrator, migrationStatus, setMigrator } from '../../../../lib/migration-store';
 
+/* eslint-disable @typescript-eslint/no-unused-vars */
 interface MigrationStatus {
   isRunning: boolean;
   progress: number;

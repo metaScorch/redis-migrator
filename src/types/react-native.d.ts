@@ -1,6 +1,12 @@
-// This empty declaration prevents TypeScript from looking for react-native types
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare module 'react-native' {
-  export type ViewStyle = any;
-  export type TextStyle = any;
-  export type ImageStyle = any;
-}
+    export interface ViewStyle {
+      [key: string]: unknown;
+    }
+    export interface TextStyle {
+      [key: string]: unknown;
+    }
+    export interface ImageStyle {
+      [key: string]: unknown;
+    }
+  }

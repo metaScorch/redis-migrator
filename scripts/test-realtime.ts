@@ -1,12 +1,15 @@
 import Redis from 'ioredis';
 import { RedisMigrator } from '../src/lib/redis-migrator';
+import { EventEmitter } from 'events';
 
 async function testRealTimeSync() {
   console.log('Starting real-time sync test...');
 
   const migrator = new RedisMigrator(
-    { host: 'localhost', port: 6379, password: '' },
-    { host: 'localhost', port: 6380, password: '' }
+    { host: 'localhost', port: 6379, password: '', tls: false },
+    { host: 'localhost', port: 6380, password: '', tls: false },
+    { enableRealtimeSync: true },
+    new EventEmitter()
   );
 
   // Setup Redis connections - target is only for monitoring
@@ -65,7 +68,4 @@ async function testRealTimeSync() {
   process.on('SIGINT', cleanup);
 }
 
-testRealTimeSync().catch(async (error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+testRealTimeSync().catch(console.error);
