@@ -20,6 +20,11 @@ import {
 import Image from 'next/image';
 import { Activity, Shield, Radio } from 'lucide-react';
 import { Slider } from "@/components/ui/slider";
+import Link from 'next/link';
+import { UserMenu } from '@/components/user-menu';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { v4 as uuidv4 } from 'uuid';
+import { PricingModal } from '@/app/components/PricingModal';
 
 interface RedisConfig {
   host: string;
@@ -119,7 +124,7 @@ const navLinks = [
   { name: 'Features', href: '#features' },
   { name: 'Migration', href: '#migration-interface' },
   { name: 'Pricing', href: '#pricing' },
-  { name: 'FAQ', href: '#faq' }
+  { name: 'FAQ', href: '#faq' },
 ];
 
 // Add this helper function to get the applicable tier and cost
@@ -200,6 +205,23 @@ export default function RedisMigration() {
     return applicableTier.flatCost || (applicableTier.costPerKey * keyCount);
   };
 
+  const [user, setUser] = useState(null);
+  const supabaseComponent = createClientComponentClient();
+  
+  // Add this useEffect to fetch user data
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabaseComponent.auth.getUser();
+      setUser(user);
+    };
+    getUser();
+  }, [supabaseComponent]);
+
+  const handleSignOut = async () => {
+    await supabaseComponent.auth.signOut();
+    setUser(null);
+  };
+
   useEffect(() => {
     if (status.isRunning) {
       const eventSource = new EventSource('/api/migration/events');
@@ -243,24 +265,47 @@ export default function RedisMigration() {
   }, [status.progress, status.startTime, completionDuration]);
 
   const startMigration = async () => {
-    // Reset validation error and status errors
     setValidationError(null);
     setStatus(prev => ({ ...prev, errors: [] }));
 
-    // Check if source and target are the same
-    if (source.host === target.host && source.port === target.port) {
-      setValidationError("Source and target cannot be the same Redis instance");
-      return;
-    }
-
-    // Check localhost restriction
-    if (!isDevelopment && (source.host === 'localhost' || target.host === 'localhost')) {
-      setValidationError("localhost is not allowed");
-      return;
-    }
-
     try {
-      const migrationId = crypto.randomUUID();
+      // First, get the key count
+      const countResponse = await fetch('/api/migration/keycount', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      });
+
+      const countData = await countResponse.json();
+      
+      if (countData.error) {
+        setValidationError(countData.error);
+        return;
+      }
+
+      // Check migration limits
+      const limitsResponse = await fetch('/api/migration/check-limits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      });
+
+      const limitsData = await limitsResponse.json();
+
+      if (!limitsData.canProceed) {
+        if (limitsData.requiresSubscription) {
+          setMigrationPricing({
+            keyCount: limitsData.totalKeys,
+            estimatedCost: limitsData.payAsYouGoCost,
+            recommendedPlan: limitsData.recommendedTier,
+          });
+          setShowPricingModal(true);
+          return;
+        }
+      }
+
+      // Continue with existing migration logic...
+      const migrationId = uuidv4();
       const response = await fetch('/api/migration/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -295,7 +340,6 @@ export default function RedisMigration() {
             startTime: timestamp
           }
         });
-
       if (logsError) {
         throw new Error(`Failed to create migration log: ${logsError.message}`);
       }
@@ -423,12 +467,18 @@ export default function RedisMigration() {
     });
   };
 
+  const [showPricingModal, setShowPricingModal] = useState(false);
+  const [migrationPricing, setMigrationPricing] = useState<{
+    keyCount: number;
+    estimatedCost: number;
+    recommendedPlan: string;
+  } | null>(null);
+
   return (
     <div className="container mx-auto p-4">
-      {/* Add the header navigation */}
       <header className="sticky top-0 z-50 w-full border-b bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-        <div className="container flex h-14 items-center">
-          <div className="flex items-center gap-2 mr-8">
+        <div className="container flex h-14 items-center justify-between">
+          <div className="flex items-center gap-2">
             <Image 
               src="/images/redswish-logo.png" 
               alt="RedSwish Logo" 
@@ -440,17 +490,31 @@ export default function RedisMigration() {
               <span className="font-bold">Zwitch</span>
             </div>
           </div>
-          <nav className="flex items-center space-x-6 text-sm font-medium">
-            {navLinks.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                className="transition-colors hover:text-red-600"
-              >
-                {link.name}
-              </a>
-            ))}
-          </nav>
+          <div className="flex items-center space-x-6">
+            <nav className="flex items-center space-x-6 text-sm font-medium">
+              {navLinks.map((link) => (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="transition-colors hover:text-red-600"
+                >
+                  {link.name}
+                </a>
+              ))}
+            </nav>
+            {user ? (
+              <UserMenu user={user} onSignOut={handleSignOut} />
+            ) : (
+              <div className="flex items-center space-x-4">
+                <Link href="/login" className="text-sm font-medium hover:text-red-600">
+                  Login
+                </Link>
+                <Link href="/signup" className="text-sm font-medium hover:text-red-600">
+                  Sign Up
+                </Link>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -1020,6 +1084,14 @@ export default function RedisMigration() {
           </AccordionItem>
         </Accordion>
       </div>
+
+      <PricingModal
+        isOpen={showPricingModal}
+        onClose={() => setShowPricingModal(false)}
+        keyCount={migrationPricing?.keyCount || 0}
+        estimatedCost={migrationPricing?.estimatedCost || 0}
+        recommendedPlan={migrationPricing?.recommendedPlan || ''}
+      />
     </div>
   );
 }

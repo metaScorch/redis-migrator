@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RedisMigrator } from '../../../../lib/redis-migrator';
 import { migrator, migrationStatus, setMigrator } from '../../../../lib/migration-store';
+import { createClient } from 'redis';
+import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { getSubscription } from '../../../../lib/subscription';
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
 interface MigrationStatus {
@@ -16,6 +20,37 @@ interface MigrationStatus {
   totalSize: number;
 }
 
+interface PricingTier {
+  name: string;
+  maxKeys: number;
+  costPerKey: number;
+  flatCost?: number;
+}
+
+const pricingTiers: PricingTier[] = [
+  { name: 'Free Plan', maxKeys: 5000, costPerKey: 0 },
+  { name: 'Starter Plan', maxKeys: 10000, costPerKey: 0.005 },
+  { name: 'Basic Plan', maxKeys: 100000, costPerKey: 0.002 },
+  { name: 'Growth Plan', maxKeys: 500000, costPerKey: 0.0015 },
+  { name: 'Pro Plan', maxKeys: 1000000, costPerKey: 0.001 },
+  { name: 'Enterprise Plan', maxKeys: 10000000, costPerKey: 0.0001, flatCost: 1000 },
+];
+
+function getApplicableTier(keyCount: number) {
+  if (keyCount === 0) return { tier: pricingTiers[0], cost: 0 };
+  
+  const applicableTier = pricingTiers
+    .filter(tier => keyCount <= tier.maxKeys)
+    .reduce((best, current) => {
+      const bestCost = best.flatCost || (best.costPerKey * keyCount);
+      const currentCost = current.flatCost || (current.costPerKey * keyCount);
+      return currentCost < bestCost ? current : best;
+    });
+
+  const cost = applicableTier.flatCost || (applicableTier.costPerKey * keyCount);
+  return { tier: applicableTier, cost };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const action = request.nextUrl.pathname.split('/').pop();
@@ -23,6 +58,47 @@ export async function POST(request: NextRequest) {
     if (action === 'start') {
       const body = await request.json();
       const { source, target, migrationId } = body;
+
+      // Create source client to check key count
+      const sourceClient = createClient({
+        url: `redis${source.tls ? 's' : ''}://${source.host}:${source.port}`,
+        password: source.password,
+      });
+
+      await sourceClient.connect();
+      const totalKeys = await sourceClient.dbSize();
+      await sourceClient.quit();
+
+      // Check if migration is allowed based on key count and user status
+      if (totalKeys > 5000) {
+        const supabase = createServerComponentClient({ cookies });
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+        if (!user || userError) {
+          return NextResponse.json(
+            { error: 'Authentication required for migrations over 5000 keys' },
+            { status: 401 }
+          );
+        }
+
+        // Check subscription status
+        const { data: subscription, error: subError } = await supabase
+          .from('subscriptions')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .single();
+
+        if (subError || !subscription) {
+          const { tier, cost } = getApplicableTier(totalKeys);
+          return NextResponse.json({
+            error: 'Subscription required',
+            requiredPlan: tier.name,
+            estimatedCost: cost,
+            keyCount: totalKeys
+          }, { status: 403 });
+        }
+      }
 
       if (migrationStatus.isRunning) {
         return NextResponse.json(
